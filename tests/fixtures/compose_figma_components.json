@@ -1,0 +1,7 @@
+[
+  {"name": "Style=Primary, Size=M", "key": "k-btn-pm", "componentSet": "Button"},
+  {"name": "Style=Secondary, Size=M", "key": "k-btn-sm", "componentSet": "Button"},
+  {"name": "Default", "key": "k-tf", "componentSet": "Text Field"},
+  {"name": "Check Box", "key": "k-cb", "componentSet": null},
+  {"name": "Top Navigation Bar", "key": "k-top", "componentSet": null}
+]

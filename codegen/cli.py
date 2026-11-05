@@ -6,6 +6,7 @@
   figma-codegen compare <figma-url> --code LoginScreen.kt   # Figma export vs. rendered code, for a human
   figma-codegen lint LoginScreen.kt --platform compose
   figma-codegen components <library-file-url>        # help build the manifest
+  figma-codegen import-compose <uikit-module> --app <app-repo>   # draft manifest + tokens from Kotlin
 """
 from __future__ import annotations
 
@@ -314,6 +315,41 @@ def cmd_components(args, cfg) -> int:
     return 0
 
 
+def cmd_import_compose(args, cfg) -> int:
+    from .compose_import import format_report, run_import
+
+    module = Path(args.module)
+    if not module.exists():
+        print(f"error: {module} does not exist", file=sys.stderr)
+        return 2
+    out_dir = Path(args.out_dir or Path(cfg.manifest_path).parent / "imported")
+    targets = [out_dir / n for n in ("components.json", "tokens.json", "import-report.md")]
+    existing = [t for t in targets if t.exists()]
+    if existing and not args.force:
+        print(f"error: {', '.join(map(str, existing))} already exist; pass --force to overwrite", file=sys.stderr)
+        return 2
+    base = None
+    if Path(cfg.manifest_path).exists():
+        base = json.loads(Path(cfg.manifest_path).read_text()).get("primitives", {}).get("compose")
+    manifest, tokens, rep = run_import(module, Path(args.app) if args.app else None,
+                                       Path(args.figma_components) if args.figma_components else None, base)
+    if rep.files == 0:
+        print(f"error: no .kt files under {module}", file=sys.stderr)
+        return 2
+    out_dir.mkdir(parents=True, exist_ok=True)
+    targets[0].write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+    targets[1].write_text(json.dumps(tokens, indent=2, ensure_ascii=False) + "\n")
+    targets[2].write_text(format_report(rep, manifest, tokens))
+    n_tokens = sum(len(v) for v in tokens.values())
+    print(f"{rep.files} Kotlin files -> {n_tokens} tokens, {len(manifest['components'])} components")
+    for t in targets:
+        print(f"  wrote {t}")
+    todo = len(rep.unparsed) + len(rep.no_accessor) + sum(1 for c in rep.components if c["figma_src"] != "figma")
+    print(f"Review {targets[2]} ({todo} items need a human), then point paths.manifest / paths.tokens at the "
+          f"drafts and run `figma-codegen spec <frame>` on a real screen.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="figma-codegen", description="Figma → UIKit code with your self-hosted LLM")
     p.add_argument("--config", help="path to codegen.yaml (default: $CODEGEN_CONFIG, ./codegen.yaml, "
@@ -389,6 +425,15 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("components", help="list published components of a Figma library file")
     c.add_argument("figma_url")
     c.set_defaults(func=cmd_components)
+
+    ic = sub.add_parser("import-compose", help="draft components.json + tokens.json from a Compose UIKit module")
+    ic.add_argument("module", help="UIKit module (or source) directory, e.g. ../android-app/uikit")
+    ic.add_argument("--app", help="app repo root: real call sites become the examples (module files are skipped)")
+    ic.add_argument("--figma-components", metavar="JSON",
+                    help="output of `figma-codegen components <library-url>`: exact Figma names and keys")
+    ic.add_argument("--out-dir", help="where to write the drafts (default: <manifest dir>/imported)")
+    ic.add_argument("--force", action="store_true", help="overwrite existing drafts")
+    ic.set_defaults(func=cmd_import_compose)
     return p
 
 

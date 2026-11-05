@@ -71,7 +71,8 @@ class DesignSystem:
             if k.startswith("$") or not isinstance(v, dict):
                 continue
             if "$value" in v:
-                self.tokens[".".join(prefix + [k])] = {"type": v.get("$type"), "value": v["$value"]}
+                self.tokens[".".join(prefix + [k])] = {"type": v.get("$type"), "value": v["$value"],
+                                                       "code": (v.get("$extensions") or {}).get("figma-codegen", {})}
             else:
                 self._flatten(v, prefix + [k])
 
@@ -120,10 +121,16 @@ class DesignSystem:
         return [p for p in self.tokens if p.split(".", 1)[0] == category]
 
     def token_code(self, path: str, platform: str) -> str:
-        """'spacing.m' -> 'AppTheme.spacing.m'; 'typography.heading/l' -> 'AppTheme.typography.headingL'."""
+        """'spacing.m' -> 'AppTheme.spacing.m'; 'typography.heading/l' -> 'AppTheme.typography.headingL'.
+        A token's `$extensions.figma-codegen.<platform>` wins; an empty categoryCode drops '{category}.'."""
+        explicit = (self.tokens.get(path) or {}).get("code", {}).get(platform)
+        if explicit:
+            return explicit
         cat, _, rest = path.partition(".")
         cat_code = self.manifest.get("categoryCode", {}).get(cat, cat)
         template = self.manifest.get("tokenCode", {}).get(platform, "{category}.{name}")
+        if cat_code == "":
+            template = template.replace("{category}.", "")
         return template.format(category=cat_code, name=camel(rest))
 
     # ---------- components ----------
@@ -132,15 +139,16 @@ class DesignSystem:
         for c in self.components:
             if c.get("figmaKey") and c["figmaKey"] in keys:
                 return c
-        lowered = [n.strip().lower() for n in names if n]
+        wanted = [normalize_name(n) for n in names if n]
         for c in self.components:
-            if c.get("figma", "").lower() in lowered:
+            if normalize_name(c.get("figma", "")) in wanted:
                 return c
         return None
 
     def component(self, figma_name: str) -> dict | None:
+        wanted = normalize_name(figma_name)
         for c in self.components:
-            if c.get("figma", "").lower() == figma_name.strip().lower():
+            if normalize_name(c.get("figma", "")) == wanted:
                 return c
         return None
 
