@@ -22,11 +22,24 @@ VISUAL_KEYS = ("background", "cornerRadius", "border", "padding")
 GRAPHIC_WARNING = "hand-drawn graphic; use a UIKit Icon/Image/component, or export it as an asset"
 
 
+@dataclass(frozen=True)
+class FigmaWarning:
+    """One problem in the Figma frame. `kind` groups warnings in the CLI summary (see report.py)."""
+    kind: str
+    node_name: str
+    node_id: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"[{self.node_name} {self.node_id}] {self.message}"
+
+
 @dataclass
 class SimplifyResult:
     spec: dict
     used_components: set[str] = field(default_factory=set)
     used_tokens: set[str] = field(default_factory=set)
+    issues: list[FigmaWarning] = field(default_factory=list)
 
     @property
     def warnings(self) -> list[str]:
@@ -48,7 +61,7 @@ class Simplifier:
         self.component_sets = node_entry.get("componentSets", {}) or {}
         self.styles = node_entry.get("styles", {}) or {}
         self.document = node_entry["document"]
-        self.warnings: list[str] = []
+        self.issues: list[FigmaWarning] = []
         self.used_components: set[str] = set()
         self.used_tokens: set[str] = set()
         self._name_counts: dict[str, int] = {}
@@ -61,13 +74,13 @@ class Simplifier:
             "screen": pascal(doc.get("name", "Screen")),
             "figmaNode": doc.get("id"),
             "root": root,
-            "warnings": self.warnings,
+            "warnings": [str(w) for w in self.issues],
         }
-        return SimplifyResult(spec, self.used_components, self.used_tokens)
+        return SimplifyResult(spec, self.used_components, self.used_tokens, self.issues)
 
     # ---------- helpers ----------
-    def _warn(self, node: dict, msg: str) -> None:
-        self.warnings.append(f"[{node.get('name', '?')} {node.get('id', '')}] {msg}")
+    def _warn(self, node: dict, msg: str, kind: str) -> None:
+        self.issues.append(FigmaWarning(kind, node.get("name", "?"), node.get("id", ""), msg))
 
     def _tok(self, token: str | None) -> str | None:
         if token:
@@ -78,7 +91,7 @@ class Simplifier:
         token = self.ds.dimension_token(value, category)
         if token:
             return self._tok(token)
-        self._warn(node, f"{what}={value:g}px matches no {category} token")
+        self._warn(node, f"{what}={value:g}px matches no {category} token", "dimension")
         return f"raw:{value:g}px"
 
     def _style_name(self, node: dict, style_key: str) -> str | None:
@@ -91,7 +104,7 @@ class Simplifier:
         paints = [p for p in all_paints if _visible(p) and p.get("type") == "SOLID"]
         if not paints:
             if paints_key == "fills" and any(_visible(p) for p in all_paints):
-                self._warn(node, f"non-solid {what} (gradient/image) ignored")
+                self._warn(node, f"non-solid {what} (gradient/image) ignored", "non_solid_paint")
             return None
         p = paints[-1]
         hex_value = figma_color_to_hex(p.get("color", {}), p.get("opacity", 1.0))
@@ -102,7 +115,8 @@ class Simplifier:
         if token:
             return self._tok(token)
         bound = f"style '{style_name}'" if style_name else "no color style bound"
-        self._warn(node, f"{what} color {hex_value} ({bound}) matches no color token")
+        self._warn(node, f"{what} color {hex_value} ({bound}) matches no color token",
+                   "color_style_unmapped" if style_name else "color_unbound")
         return f"raw:{hex_value}"
 
     def _fill_color(self, node: dict, what: str = "fill") -> str | None:
@@ -222,7 +236,7 @@ class Simplifier:
         out: dict = {"type": "Graphic", "name": n.get("name"),
                      "sizePx": f"{box.get('width', 0):g}x{box.get('height', 0):g}"}
         self._sizing(n, out)
-        self._warn(n, GRAPHIC_WARNING)
+        self._warn(n, GRAPHIC_WARNING, "graphic")
         return out
 
     # ---------- node dispatch ----------
@@ -241,7 +255,7 @@ class Simplifier:
             return self._text(n)
         if t in CONTAINER_TYPES:
             return self._container(n, parent_mode, is_root)
-        self._warn(n, f"{t} node skipped; use a UIKit component (e.g. Icon, Divider, Image) instead")
+        self._warn(n, f"{t} node skipped; use a UIKit component (e.g. Icon, Divider, Image) instead", "skipped_node")
         return None
 
     def _unmapped_instance(self, n: dict, parent_mode: str | None, is_root: bool) -> dict:
@@ -252,9 +266,10 @@ class Simplifier:
             out["figmaComponent"] = name
             return out
         if not _visible_children(n):
-            self._warn(n, f"instance of '{name}' is not in the UIKit manifest")
+            self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component")
             return {"type": "Unmapped", "name": n.get("name"), "figmaComponent": name}
-        self._warn(n, f"instance of '{name}' is not in the UIKit manifest; expanded as plain layout")
+        self._warn(n, f"instance of '{name}' is not in the UIKit manifest; expanded as plain layout",
+                   "unknown_component")
         out = self._container(n, parent_mode, is_root)
         out.setdefault("figmaComponent", name)
         return out
@@ -274,7 +289,8 @@ class Simplifier:
 
         out: dict = {"type": {"VERTICAL": "Column", "HORIZONTAL": "Row"}.get(mode, "Box"), "name": n.get("name")}
         if mode == "NONE" and len(children) > 1:
-            self._warn(n, "no auto-layout; children positions are absolute and will be stacked. Add auto-layout in Figma.")
+            self._warn(n, "no auto-layout; children positions are absolute and will be stacked. Add auto-layout in Figma.",
+                       "no_auto_layout")
 
         bg = self._fill_color(n, "background")
         if bg:
@@ -329,7 +345,8 @@ class Simplifier:
         if typo:
             out["style"] = self._tok(typo)
         else:
-            self._warn(n, f"text style (style={style_name}, size={style.get('fontSize')}, weight={style.get('fontWeight')}) matches no typography token")
+            self._warn(n, f"text style (style={style_name}, size={style.get('fontSize')}, weight={style.get('fontWeight')}) matches no typography token",
+                       "typography")
             out["style"] = f"raw:{style.get('fontSize')}px/{style.get('fontWeight')}"
         color = self._fill_color(n, "text")
         if color:
@@ -349,11 +366,11 @@ class Simplifier:
                     continue
                 if "map" in spec:
                     if val not in spec["map"]:
-                        self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' has no mapping")
+                        self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' has no mapping", "prop_value")
                         continue
                     val = spec["map"][val]
                 elif "values" in spec and val not in spec["values"]:
-                    self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' not in {spec['values']}")
+                    self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' not in {spec['values']}", "prop_value")
                 props[prop] = val
             elif "figmaText" in spec:
                 text = self._find_text(n, spec["figmaText"])
@@ -370,12 +387,12 @@ class Simplifier:
         if kind == "input":
             base = entry["figma"] if is_default_name else strip_suffix(pascal(layer), INPUT_SUFFIXES)
             if is_default_name:
-                self._warn(n, "layer has default name; rename it (e.g. 'EmailField') for a meaningful state property")
+                self._warn(n, "layer has default name; rename it (e.g. 'EmailField') for a meaningful state property", "default_name")
             out["binding"] = camel(self._unique_name(pascal(base)))
         elif kind == "action":
             base = entry["figma"] if is_default_name else strip_suffix(pascal(layer), ACTION_SUFFIXES)
             if is_default_name:
-                self._warn(n, "layer has default name; rename it (e.g. 'LoginButton') for a meaningful callback")
+                self._warn(n, "layer has default name; rename it (e.g. 'LoginButton') for a meaningful callback", "default_name")
             out["event"] = "on" + self._unique_name(pascal(base))
         self._sizing(n, out)
         return out

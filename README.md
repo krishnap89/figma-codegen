@@ -141,7 +141,22 @@ figma-codegen components <library-file-url>          # list library components +
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--model`,
-`--repo` (enables code search tools), `--figma-json` (offline: saved `/v1/files/:key/nodes` response).
+`--repo` (enables code search tools), `--figma-json` (offline: saved `/v1/files/:key/nodes` response),
+`-v/--verbose` (also on `spec`: list every Figma warning).
+
+While it runs, progress goes to stderr: each step (fetching Figma, simplifying, `round 2/4 · generating`,
+`round 2/4 · lint + compile`) shows its elapsed time and the total. On a terminal the running step is a
+live spinner line that says what it is waiting on (the model, or a tool call). In CI logs, steps that
+take more than 2s print a start line and a "still running" line every 30s. Output is colored on a
+terminal only; `NO_COLOR=1` turns color off, `FORCE_COLOR=1` turns it on for logs that render ANSI.
+Figma warnings are grouped by type with counts and example layers:
+
+```
+Figma: 20 warnings — fixing these in Figma gives better code
+  8  hand-drawn graphics                  Frame 17, Overlay ×5, Frame 7 +1 more
+  4  colors not bound to a color style    Frame 9, Frame 10, Frame 11 +1 more
+  run with --verbose to list every warning
+```
 
 Every download (`fetch`, `spec`, `generate`) saves the raw Figma response to
 `.codegen/figma/<fileKey>_<nodeId>.json`, so you can re-run offline with `--figma-json <that file>`

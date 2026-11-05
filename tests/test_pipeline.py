@@ -100,7 +100,7 @@ def test_agent_tool_call_then_fix(ds, result, tmp_path):
         (good, None),
     ])
     cfg = Config(trace_dir=str(tmp_path), examples_dir=None)
-    agent = CodegenAgent(cfg, ds, client=client, log=lambda *_: None)
+    agent = CodegenAgent(cfg, ds, client=client)
     res = agent.run(result, "compose", "LoginScreen")
     assert res.ok and res.rounds == 2 and res.tool_calls == 1
     assert "AppTheme.spacing.m" in res.code
@@ -117,7 +117,7 @@ def test_agent_gives_up(ds, result, tmp_path):
     bad = "```kotlin\nval x = 8.dp\n```"
     cfg = Config(trace_dir=None, examples_dir=None, max_rounds=2, use_tools=False)
     client = FakeClient([(bad, None), (bad, None)])
-    res = CodegenAgent(cfg, ds, client=client, log=lambda *_: None).run(result, "compose", "X")
+    res = CodegenAgent(cfg, ds, client=client).run(result, "compose", "X")
     assert not res.ok and res.rounds == 2 and "tools" not in client.requests[0]
 
 

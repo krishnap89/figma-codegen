@@ -21,7 +21,10 @@ from .design_system import DesignSystem
 from .figma_client import (FigmaClient, default_json_name, load_node_from_file, parse_figma_url,
                            save_nodes_response)
 from .naming import pascal
-from .simplify import simplify
+from .progress import Progress, fmt_duration
+from .report import format_warnings
+from .simplify import SimplifyResult, simplify
+from .style import Style
 from .validate import SandboxConfigError, check_sandbox, lint
 
 
@@ -39,23 +42,37 @@ def _download(url: str, cfg, save_to: str | None) -> tuple[dict, str, Path | Non
     return data, node_id, saved
 
 
-def _load_node(args, cfg) -> dict:
+def _load_node(args, cfg, progress: Progress) -> dict:
     node_id = None
     if args.figma_url:
         _, node_id = parse_figma_url(args.figma_url)
     if args.figma_json:
-        return load_node_from_file(args.figma_json, node_id)
+        with progress.step(f"reading {args.figma_json}"):
+            return load_node_from_file(args.figma_json, node_id)
     if not args.figma_url:
         sys.exit("error: pass a Figma URL or --figma-json")
-    data, node_id, saved = _download(args.figma_url, cfg, args.save_figma_json)
+    with progress.step(f"fetching Figma frame {node_id}"):
+        data, node_id, saved = _download(args.figma_url, cfg, args.save_figma_json)
     if saved:
-        # stderr, so `spec` output on stdout stays pure JSON
-        print(f"Figma JSON saved to {saved}  (reuse offline with --figma-json {saved})", file=sys.stderr)
+        # progress goes to stderr, so `spec` output on stdout stays pure JSON
+        progress.info(f"  Figma JSON saved to {saved}  (reuse offline with --figma-json {saved})")
     return data["nodes"][node_id]
 
 
+def _simplify(args, cfg, progress: Progress) -> tuple[DesignSystem, SimplifyResult]:
+    with progress.step("loading design system"):
+        ds = _load_ds(cfg)
+    node = _load_node(args, cfg, progress)
+    with progress.step("simplifying") as st:
+        result = simplify(ds, node)
+        n = len(result.issues)
+        st.done(f"{n} warning{'s' if n != 1 else ''}" if n else "no warnings")
+    return ds, result
+
+
 def cmd_fetch(args, cfg) -> int:
-    _, _, saved = _download(args.figma_url, cfg, args.out)
+    with Progress().step("fetching Figma frame"):
+        _, _, saved = _download(args.figma_url, cfg, args.out)
     if not saved:
         print("error: nowhere to save; pass --out or set paths.figma_json", file=sys.stderr)
         return 2
@@ -71,16 +88,15 @@ def _load_ds(cfg) -> DesignSystem:
 
 
 def cmd_spec(args, cfg) -> int:
-    ds = _load_ds(cfg)
-    result = simplify(ds, _load_node(args, cfg))
+    _, result = _simplify(args, cfg, Progress())
     text = json.dumps(result.spec, indent=2)
     if args.out:
         Path(args.out).write_text(text)
         print(f"spec written to {args.out}")
     else:
         print(text)
-    if result.warnings:
-        print(f"\n{len(result.warnings)} warning(s) — fix these in Figma for better output", file=sys.stderr)
+    if result.issues:
+        print("\n" + format_warnings(result.issues, args.verbose, Style.for_stream(sys.stderr)), file=sys.stderr)
     return 0
 
 
@@ -91,56 +107,59 @@ def cmd_generate(args, cfg) -> int:
         cfg.use_tools = False
     if args.repo:
         cfg.repo_root = str(Path(args.repo).resolve())
-    ds = _load_ds(cfg)
-    result = simplify(ds, _load_node(args, cfg))
-    if result.warnings:
-        print(f"Figma warnings ({len(result.warnings)}):")
-        for w in result.warnings:
-            print(f"  ! {w}")
+    progress = Progress()
+    st = Style.for_stream(sys.stdout)
+    ds, result = _simplify(args, cfg, progress)
+    if result.issues:
+        print(format_warnings(result.issues, args.verbose, st))
         if args.strict:
-            print("aborting (--strict). Fix the design or drop --strict.")
+            print(st.err("aborting (--strict).") + " Fix the design or drop --strict.")
             return 2
 
     try:
         check_sandbox(cfg.platform(args.platform))
     except SandboxConfigError as e:
-        print(f"error: {e}\n  fix platforms.{args.platform} in codegen.yaml, or remove sandbox_file/compile_cmd to skip compiling")
+        print(f"{st.err('error:')} {e}\n  fix platforms.{args.platform} in codegen.yaml, or remove sandbox_file/compile_cmd to skip compiling")
         return 2
 
     name = args.name or pascal(Path(args.out).stem) or result.spec["screen"]
-    print(f"Generating {args.platform} screen '{name}' with {cfg.llm_model} @ {cfg.llm_base_url}")
-    agent = CodegenAgent(cfg, ds)
+    print(f"Generating {args.platform} screen {st(name, 'bold')} with {st(cfg.llm_model, 'cyan')} "
+          + st.dim(f"@ {cfg.llm_base_url}"))
+    agent = CodegenAgent(cfg, ds, progress=progress)
     try:
         res = agent.run(result, args.platform, name, args.package)
     except SandboxConfigError as e:
-        print(f"error: {e}")
+        print(f"{st.err('error:')} {e}")
         return 2
     except Exception as e:
         if type(e).__module__.startswith("openai"):
-            print(f"error: LLM request failed ({type(e).__name__}: {e}). Check llm.base_url / llm.model.")
+            print(f"{st.err('error:')} LLM request failed ({type(e).__name__}: {e}). Check llm.base_url / llm.model.")
             return 3
         raise
 
     out = Path(args.out)
+    took = fmt_duration(progress.elapsed)
     if res.code is None:
-        print("✗ the model did not return any code")
+        print(f"{st.mark(False)} {st.err('the model did not return any code')}  {st.dim(f'(total {took})')}")
         return 1
     if res.ok:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(res.code)
-        print(f"✓ {out}  (rounds: {res.rounds}, tool calls: {res.tool_calls})")
+        print(f"{st.mark(True)} {st(str(out), 'bold', 'green')}  "
+              + st.dim(f"(rounds: {res.rounds}, tool calls: {res.tool_calls}, total {took})"))
         if res.validation and res.validation.compile_skipped:
-            print("  note: not compiled — configure a sandbox in codegen.yaml")
+            print(st.warn("  note: not compiled — configure a sandbox in codegen.yaml"))
         rc = 0
     else:
         draft = out.with_name(out.name + ".draft")
         draft.write_text(res.code)
-        print(f"✗ still failing after {res.rounds} rounds. Draft saved to {draft}")
+        print(f"{st.mark(False)} {st.err(f'still failing after {res.rounds} rounds')} {st.dim(f'(total {took})')}. "
+              f"Draft saved to {st(str(draft), 'bold')}")
         if res.validation:
             print(res.validation.feedback())
         rc = 1
     if res.trace_path:
-        print(f"  trace: {res.trace_path}")
+        print(st.dim(f"  trace: {res.trace_path}"))
     return rc
 
 
@@ -191,6 +210,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--figma-json", help="use a saved /v1/files/:key/nodes response instead of the API")
         sp.add_argument("--save-figma-json", metavar="PATH",
                         help="where to save the downloaded Figma JSON (default: paths.figma_json/<fileKey>_<nodeId>.json)")
+        sp.add_argument("-v", "--verbose", action="store_true",
+                        help="list every Figma warning instead of a summary grouped by type")
 
     fe = sub.add_parser("fetch", help="download a frame's Figma JSON only (for offline use with --figma-json)")
     fe.add_argument("figma_url", help="Figma frame link (Copy link to selection)")

@@ -11,10 +11,11 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .config import Config
 from .design_system import DesignSystem
+from .progress import Progress
 from .prompts import (PLATFORMS, fix_prompt, load_examples, no_code_prompt,
                       system_prompt, user_prompt)
 from .simplify import SimplifyResult
@@ -73,10 +74,10 @@ def _msg_to_dict(msg: Any) -> dict:
 
 
 class CodegenAgent:
-    def __init__(self, cfg: Config, ds: DesignSystem, client: Any = None, log: Callable[[str], None] = print):
+    def __init__(self, cfg: Config, ds: DesignSystem, client: Any = None, progress: Progress | None = None):
         self.cfg = cfg
         self.ds = ds
-        self.log = log
+        self.progress = progress or Progress(enabled=False)
         if client is None:
             from openai import OpenAI
             client = OpenAI(base_url=cfg.llm_base_url, api_key=cfg.llm_api_key)
@@ -95,28 +96,39 @@ class CodegenAgent:
 
         out = AgentResult(ok=False, code=None, rounds=0, validation=None,
                           trace_path=str(tracer.path) if tracer.path else None)
+        plat = self.cfg.platform(platform)
+        check_label = "lint + compile" if plat.sandbox_file and plat.compile_cmd else "lint"
         for rnd in range(1, self.cfg.max_rounds + 1):
             out.rounds = rnd
-            self.log(f"round {rnd}: generating…")
-            content, n_calls = self._complete(messages, tools, tracer)
-            out.tool_calls += n_calls
-            code = extract_code(content, platform)
+            tag = f"round {rnd}/{self.cfg.max_rounds}"
+            with self.progress.step(f"{tag} · generating") as st:
+                content, n_calls = self._complete(messages, tools, tracer)
+                out.tool_calls += n_calls
+                code = extract_code(content, platform)
+                calls = f", {n_calls} tool call{'s' if n_calls != 1 else ''}" if n_calls else ""
+                if code:
+                    st.done(f"{len(code.splitlines())} lines{calls}")
+                else:
+                    st.done(f"no code block in answer{calls}; asking again", ok=False)
             if not code:
-                self.log("  no code block in answer; asking again")
                 tracer.log("no_code", content=content)
                 messages.append({"role": "user", "content": no_code_prompt(platform)})
                 continue
 
             out.code = code
-            v = validate(code, platform, self.cfg.platform(platform))
+            with self.progress.step(f"{tag} · {check_label}") as st:
+                v = validate(code, platform, plat)
+                if v.ok:
+                    st.done("valid" + (" (compile skipped: no sandbox configured)" if v.compile_skipped else ""))
+                else:
+                    compiled = "skipped" if v.compile_skipped else ("ok" if v.compile_ok else "failed")
+                    st.done(f"{len(v.lint_issues)} lint issue(s), compile {compiled}", ok=False)
             out.validation = v
             tracer.log("validation", round=rnd, lint=v.lint_issues, compile_ok=v.compile_ok,
                        compile_output=v.compile_output, compile_skipped=v.compile_skipped)
             if v.ok:
-                self.log(f"  ✓ valid{' (compile skipped: no sandbox configured)' if v.compile_skipped else ''}")
                 out.ok = True
                 return out
-            self.log(f"  ✗ {len(v.lint_issues)} lint issue(s), compile {'ok' if v.compile_ok else 'failed'}")
             messages.append({"role": "user", "content": fix_prompt(v.feedback(), platform)})
             self._compact(messages)
         return out
@@ -131,6 +143,8 @@ class CodegenAgent:
             offer_tools = schemas and i < self.cfg.max_tool_calls_per_round
             if offer_tools:
                 kwargs["tools"] = schemas
+            self.progress.update(f"waiting for {self.cfg.llm_model}"
+                                 + (f" (after {calls} tool call{'s' if calls != 1 else ''})" if calls else ""))
             resp = self.client.chat.completions.create(**kwargs)
             msg = resp.choices[0].message
             messages.append(_msg_to_dict(msg))
@@ -140,8 +154,11 @@ class CodegenAgent:
                 return msg.content or "", calls
             for call in msg.tool_calls:
                 calls += 1
+                self.progress.update(f"tool {call.function.name}")
                 result = tools.dispatch(call.function.name, call.function.arguments)
-                self.log(f"  tool {call.function.name}({call.function.arguments})")
+                args = call.function.arguments or ""
+                self.progress.info(f"    tool {call.function.name}({args if len(args) <= 80 else args[:79] + '…'})",
+                                   dim=True)
                 tracer.log("tool", name=call.function.name, args=call.function.arguments, result=result[:2000])
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             if not offer_tools:
