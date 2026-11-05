@@ -91,6 +91,33 @@ Relative paths from the config file resolve against that file's directory; relat
 vars or `--set` resolve against the current directory. Prefer env vars over flags for secrets so
 they don't land in shell history.
 
+### 0. Existing Compose UIKit? Draft both files from the code
+
+```bash
+figma-codegen components <library-file-url> > figma-components.json      # optional: exact Figma names/keys
+figma-codegen import-compose ../android-app/uikit --app ../android-app \
+  --figma-components figma-components.json                               # -> manifest/imported/
+```
+
+- **Tokens** come from the Kotlin theme, so token paths are names the code can reference. The importer reads
+  `Color(0xFF…)`, `Color.White`, `.copy(alpha = …)`, `N.dp`, `TextStyle(…)` and `.copy(…)`, and follows
+  references between vals. It finds them in top-level vals, objects (`object Dimens { val spacingM = 16.dp }`),
+  theme classes reached through an object getter or a CompositionLocal (`AppTheme.colors.textPrimary`), and
+  Material builders (`lightColors(…)`, `Typography(…)`). Only the light theme is used. Dp values are split into
+  spacing / radius / border / size by name.
+- When `tokenCode` can't produce a token's Kotlin expression, the token stores it in
+  `$extensions.figma-codegen.compose`. Top-level palette vals like `Gray900` are one example.
+- **Components** come from public `@Composable` functions. Previews, `*Theme` and private/internal functions
+  are skipped. Each component gets its signature (with overloads) and KDoc. `kind` and `stateType` are read
+  from `onXChange` / `onX` params. `props` are drafted from enum and text params. With `--app`, the example is
+  the shortest real call site; without it, the example is synthesized.
+- `import-report.md` lists everything that needs a human: guessed Figma names, values the importer couldn't
+  evaluate, missing KDoc, and Figma components with no composable. It sorts components by call sites so you
+  can start with the ones that matter.
+
+Review the drafts, then point `paths.manifest` / `paths.tokens` at them (or copy them over) and run
+`figma-codegen spec <frame>` on a few real screens.
+
 ### 1. Fill in the manifest (`manifest/components.json`)
 
 One entry per UIKit component. The included Button / TextField / Link entries show the format:
