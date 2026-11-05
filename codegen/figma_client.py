@@ -36,20 +36,36 @@ class FigmaClient:
             timeout=timeout,
         )
 
-    def get_node(self, file_key: str, node_id: str) -> dict:
-        """Returns {"document", "components", "componentSets", "styles"} for one node."""
+    def get_nodes_response(self, file_key: str, node_id: str) -> dict:
+        """The raw /v1/files/:key/nodes response for one node (the format --figma-json reads)."""
         r = self._client.get(f"/files/{file_key}/nodes", params={"ids": node_id})
         r.raise_for_status()
-        entry = (r.json().get("nodes") or {}).get(node_id)
-        if not entry:
+        data = r.json()
+        if not (data.get("nodes") or {}).get(node_id):
             raise LookupError(f"Node {node_id} not found in file {file_key}")
-        return entry
+        return data
+
+    def get_node(self, file_key: str, node_id: str) -> dict:
+        """Returns {"document", "components", "componentSets", "styles"} for one node."""
+        return self.get_nodes_response(file_key, node_id)["nodes"][node_id]
 
     def list_library_components(self, file_key: str) -> list[dict]:
         """Published components of a library file (useful to build the manifest)."""
         r = self._client.get(f"/files/{file_key}/components")
         r.raise_for_status()
         return r.json().get("meta", {}).get("components", [])
+
+
+def default_json_name(file_key: str, node_id: str) -> str:
+    """'AbC123', '12:300' -> 'AbC123_12-300.json' (':' is awkward in file names)."""
+    return f"{file_key}_{node_id.replace(':', '-')}.json"
+
+
+def save_nodes_response(data: dict, path: str | Path) -> Path:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    return p
 
 
 def load_node_from_file(path: str, node_id: str | None = None) -> dict:

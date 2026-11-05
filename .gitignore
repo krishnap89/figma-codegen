@@ -22,8 +22,9 @@ htmlcov/
 codegen.yaml
 .env
 
-# Agent traces / generated output
+# Agent traces, saved Figma JSON / generated output
 .codegen/
+out/
 
 # Editors / OS
 .vscode/

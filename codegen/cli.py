@@ -2,6 +2,7 @@
 
   figma-codegen generate <figma-url> --platform compose --out LoginScreen.kt
   figma-codegen spec <figma-url>                     # inspect the simplified spec
+  figma-codegen fetch <figma-url>                    # only download + save the Figma JSON
   figma-codegen lint LoginScreen.kt --platform compose
   figma-codegen components <library-file-url>        # help build the manifest
 """
@@ -17,21 +18,49 @@ import yaml
 
 from .config import ENV_VARS, describe, load_config
 from .design_system import DesignSystem
-from .figma_client import FigmaClient, load_node_from_file, parse_figma_url
+from .figma_client import (FigmaClient, default_json_name, load_node_from_file, parse_figma_url,
+                           save_nodes_response)
 from .naming import pascal
 from .simplify import simplify
 from .validate import SandboxConfigError, check_sandbox, lint
 
 
+def _download(url: str, cfg, save_to: str | None) -> tuple[dict, str, Path | None]:
+    """Download one frame from the Figma API and save the raw response.
+
+    Saved to `save_to` if given, else to paths.figma_json/<fileKey>_<nodeId>.json
+    (nothing is saved when paths.figma_json is empty). Returns (response, node_id, saved_path).
+    """
+    file_key, node_id = parse_figma_url(url)
+    data = FigmaClient(cfg.figma_token).get_nodes_response(file_key, node_id)
+    target = save_to or (str(Path(cfg.figma_json_dir) / default_json_name(file_key, node_id))
+                         if cfg.figma_json_dir else None)
+    saved = save_nodes_response(data, target) if target else None
+    return data, node_id, saved
+
+
 def _load_node(args, cfg) -> dict:
     node_id = None
     if args.figma_url:
-        file_key, node_id = parse_figma_url(args.figma_url)
+        _, node_id = parse_figma_url(args.figma_url)
     if args.figma_json:
         return load_node_from_file(args.figma_json, node_id)
     if not args.figma_url:
         sys.exit("error: pass a Figma URL or --figma-json")
-    return FigmaClient(cfg.figma_token).get_node(file_key, node_id)
+    data, node_id, saved = _download(args.figma_url, cfg, args.save_figma_json)
+    if saved:
+        # stderr, so `spec` output on stdout stays pure JSON
+        print(f"Figma JSON saved to {saved}  (reuse offline with --figma-json {saved})", file=sys.stderr)
+    return data["nodes"][node_id]
+
+
+def cmd_fetch(args, cfg) -> int:
+    _, _, saved = _download(args.figma_url, cfg, args.out)
+    if not saved:
+        print("error: nowhere to save; pass --out or set paths.figma_json", file=sys.stderr)
+        return 2
+    print(saved)
+    return 0
 
 
 def _load_ds(cfg) -> DesignSystem:
@@ -160,6 +189,13 @@ def build_parser() -> argparse.ArgumentParser:
     def add_source(sp):
         sp.add_argument("figma_url", nargs="?", help="Figma frame link (Copy link to selection)")
         sp.add_argument("--figma-json", help="use a saved /v1/files/:key/nodes response instead of the API")
+        sp.add_argument("--save-figma-json", metavar="PATH",
+                        help="where to save the downloaded Figma JSON (default: paths.figma_json/<fileKey>_<nodeId>.json)")
+
+    fe = sub.add_parser("fetch", help="download a frame's Figma JSON only (for offline use with --figma-json)")
+    fe.add_argument("figma_url", help="Figma frame link (Copy link to selection)")
+    fe.add_argument("--out", help="output file (default: paths.figma_json/<fileKey>_<nodeId>.json)")
+    fe.set_defaults(func=cmd_fetch)
 
     g = sub.add_parser("generate", help="generate screen code from a Figma frame")
     add_source(g)

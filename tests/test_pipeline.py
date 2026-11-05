@@ -119,3 +119,52 @@ def test_agent_gives_up(ds, result, tmp_path):
     client = FakeClient([(bad, None), (bad, None)])
     res = CodegenAgent(cfg, ds, client=client, log=lambda *_: None).run(result, "compose", "X")
     assert not res.ok and res.rounds == 2 and "tools" not in client.requests[0]
+
+
+class FakeFigma:
+    """Stands in for FigmaClient: serves the login fixture as the API response."""
+
+    def __init__(self, token):
+        pass
+
+    def get_nodes_response(self, file_key, node_id):
+        return json.loads(FIXTURE.read_text())
+
+
+URL = "https://www.figma.com/design/AbC123/App?node-id=12-300"
+
+
+def _run_cli(monkeypatch, tmp_path, argv):
+    from codegen import cli
+    monkeypatch.setattr(cli, "FigmaClient", FakeFigma)
+    monkeypatch.setenv("CODEGEN_FIGMA_JSON_DIR", str(tmp_path / "figma"))
+    monkeypatch.setenv("CODEGEN_MANIFEST", str(ROOT / "manifest/components.json"))
+    monkeypatch.setenv("CODEGEN_TOKENS", str(ROOT / "manifest/tokens.json"))
+    monkeypatch.chdir(tmp_path)  # no codegen.yaml here
+    return cli.main(argv)
+
+
+def test_fetch_saves_default_path(monkeypatch, tmp_path, capsys):
+    assert _run_cli(monkeypatch, tmp_path, ["fetch", URL]) == 0
+    saved = tmp_path / "figma" / "AbC123_12-300.json"
+    assert capsys.readouterr().out.strip() == str(saved)
+    # the saved file is exactly what --figma-json accepts
+    assert load_node_from_file(str(saved), "12:300")["document"]["id"] == "12:300"
+
+
+def test_fetch_custom_out(monkeypatch, tmp_path):
+    assert _run_cli(monkeypatch, tmp_path, ["fetch", URL, "--out", "screens/login.json"]) == 0
+    assert (tmp_path / "screens/login.json").exists()
+
+
+def test_spec_download_also_saves_json(monkeypatch, tmp_path, capsys):
+    assert _run_cli(monkeypatch, tmp_path, ["spec", URL]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["screen"] == "LoginScreen"  # stdout stays pure JSON
+    assert "Figma JSON saved to" in out.err
+    assert (tmp_path / "figma" / "AbC123_12-300.json").exists()
+
+
+def test_offline_run_does_not_save(monkeypatch, tmp_path):
+    assert _run_cli(monkeypatch, tmp_path, ["spec", URL, "--figma-json", str(FIXTURE)]) == 0
+    assert not (tmp_path / "figma").exists()

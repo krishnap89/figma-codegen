@@ -42,7 +42,7 @@ Design decisions, chosen for a mid-size self-hosted model:
 ## Setup
 
 ```bash
-pip install -e .            # Python 3.10+; deps: openai, httpx, pyyaml
+pip install -e .            # Python 3.9+; deps: openai, httpx, pyyaml
 cp codegen.example.yaml codegen.yaml
 export FIGMA_TOKEN=figd_...  # Figma personal access token (read-only scope is enough)
 ```
@@ -73,7 +73,7 @@ Every setting can be supplied without touching the project's `codegen.yaml`. Pre
 | `CODEGEN_USE_TOOLS` | `agent.use_tools` (`true`/`false`) |
 | `CODEGEN_MAX_EXAMPLES` | `agent.max_examples` |
 | `FIGMA_TOKEN` / `CODEGEN_FIGMA_TOKEN` | `figma.token` |
-| `CODEGEN_MANIFEST`, `CODEGEN_TOKENS`, `CODEGEN_EXAMPLES_DIR`, `CODEGEN_TRACE_DIR`, `CODEGEN_REPO_ROOT` | `paths.*` |
+| `CODEGEN_MANIFEST`, `CODEGEN_TOKENS`, `CODEGEN_EXAMPLES_DIR`, `CODEGEN_TRACE_DIR`, `CODEGEN_FIGMA_JSON_DIR`, `CODEGEN_REPO_ROOT` | `paths.*` |
 
 `--set` reaches any key, including per-platform ones; values are parsed as YAML so numbers,
 booleans and lists work:
@@ -131,6 +131,7 @@ See `examples/README.md`. Two real screens from your codebase usually help more 
 ## Commands
 
 ```bash
+figma-codegen fetch <frame-url>                      # only download + save the Figma JSON
 figma-codegen spec <frame-url>                       # inspect what the model will see + warnings
 figma-codegen generate <frame-url> --platform compose --out LoginScreen.kt --package com.x.login
 figma-codegen generate <frame-url> --platform swiftui --out LoginScreen.swift --repo ../ios-app
@@ -140,6 +141,11 @@ figma-codegen components <library-file-url>          # list library components +
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--model`,
 `--repo` (enables code search tools), `--figma-json` (offline: saved `/v1/files/:key/nodes` response).
+
+Every download (`fetch`, `spec`, `generate`) saves the raw Figma response to
+`.codegen/figma/<fileKey>_<nodeId>.json`, so you can re-run offline with `--figma-json <that file>`
+without spending API requests. Change the folder with `paths.figma_json` (empty disables saving), or
+one file with `--save-figma-json PATH`.
 
 Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
 `3` LLM endpoint error.

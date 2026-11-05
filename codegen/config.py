@@ -47,6 +47,8 @@ class Config:
     examples_dir: str = "examples"
     max_examples: int = 2
     trace_dir: str = ".codegen/traces"
+    # Every Figma download is saved here as <fileKey>_<nodeId>.json (reusable with --figma-json).
+    figma_json_dir: str | None = ".codegen/figma"
     repo_root: str | None = None
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     # Where the config file came from (None = defaults only). Informational.
@@ -73,10 +75,12 @@ ENV_VARS: dict[str, str] = {
     "CODEGEN_TOKENS": "paths.tokens",
     "CODEGEN_EXAMPLES_DIR": "paths.examples",
     "CODEGEN_TRACE_DIR": "paths.traces",
+    "CODEGEN_FIGMA_JSON_DIR": "paths.figma_json",
     "CODEGEN_REPO_ROOT": "paths.repo_root",
 }
 
-_PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.traces", "paths.repo_root"}
+_PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.traces", "paths.figma_json",
+              "paths.repo_root"}
 _PLATFORM_PATH_FIELDS = {"sandbox_file", "compile_cwd"}
 _STRING_KEYS = {"llm.base_url", "llm.model", "llm.api_key", "figma.token"}
 
@@ -204,6 +208,7 @@ def _from_dict(data: dict, base: Path) -> Config:
     cfg.tokens_path = _resolve(base, paths.get("tokens", cfg.tokens_path))
     cfg.examples_dir = _resolve(base, paths.get("examples", cfg.examples_dir))
     cfg.trace_dir = _resolve(base, paths.get("traces", cfg.trace_dir))
+    cfg.figma_json_dir = _resolve(base, paths.get("figma_json", cfg.figma_json_dir))  # empty/null disables saving
     cfg.repo_root = _resolve(base, paths.get("repo_root"))
 
     for name, pdata in _section(data, "platforms").items():
@@ -236,6 +241,6 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
                   "use_tools": cfg.use_tools, "max_examples": cfg.max_examples},
         "figma": {"token": secret(cfg.figma_token)},
         "paths": {"manifest": cfg.manifest_path, "tokens": cfg.tokens_path, "examples": cfg.examples_dir,
-                  "traces": cfg.trace_dir, "repo_root": cfg.repo_root},
+                  "traces": cfg.trace_dir, "figma_json": cfg.figma_json_dir, "repo_root": cfg.repo_root},
         "platforms": {name: vars(pc) for name, pc in cfg.platforms.items()},
     }

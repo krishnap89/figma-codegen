@@ -21,6 +21,7 @@ paths:
   tokens: manifest/tokens.json
   examples: examples
   traces: .codegen/traces
+  figma_json: .codegen/figma     # every Figma download is saved here (empty = don't save)
   # repo_root: ../android-app    # enables search_code / read_file tools
 
 platforms:
