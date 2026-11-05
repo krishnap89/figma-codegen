@@ -100,7 +100,8 @@ One entry per UIKit component. The included Button / TextField / Link entries sh
 | `figma` | component (set) name in the Figma library |
 | `figmaKey` | component set key; get it with `figma-codegen components <library-file-url>` |
 | `kind` | `input` → creates a state binding, `action` → creates a callback |
-| `props.*.figmaProp` | Figma variant/boolean property; `map` translates values |
+| `stateType` | type of an `input` binding: `String` (default), `Boolean` or `Int` → e.g. `val agree: Boolean = false` / `var agree: Bool = false` |
+| `props.*.figmaProp` | Figma component property; `map` translates values. Use the short name (`Style`, `Button Text`) or the exact key (`Text#905:0`) when a variant and a text property share a name; variants win the short name. INSTANCE_SWAP values become the swapped component's name (`arrow-right`) |
 | `props.*.figmaText` | read text from a named text layer inside the instance (hidden layers ignored) |
 | `compose` / `swiftui` | import, signature and one usage example |
 
@@ -149,6 +150,24 @@ one file with `--save-figma-json PATH`.
 
 Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
 `3` LLM endpoint error.
+
+## What the simplifier does with real files
+
+- **Library components not in the manifest** (e.g. "Top Navigation Bar", "Main Content") are expanded
+  as plain layout, so their content isn't lost; the node keeps `"figmaComponent"` and a warning says it
+  was expanded. Only an empty unknown instance becomes `"Unmapped"`.
+- **Hand-drawn artwork** (vectors, shapes, and frames/groups/instances containing only those) becomes one
+  `{"type": "Graphic", "name", "sizePx"}` node with one warning, instead of one warning per vector.
+  Instances mapped in the manifest are never treated as artwork.
+- **Wrapper frames** that hold a single child and draw nothing (no background, radius, border or padding)
+  are replaced by their child, which inherits `fill` / `weight`.
+- **Colors** match a token by the bound Figma style's name first (`Carbon / Darkest` →
+  `color.carbon.darkest`; case and punctuation ignored), then by hex value. Text styles match the same way
+  before falling back to font size/weight. Unmatched colors say whether a style was bound.
+- **Borders**: a visible solid stroke becomes `"border": {"width", "color"}`; a fully transparent stroke
+  becomes `"color": "transparent"` (space reserved for a selected state) without a warning. Widths use
+  `border.*` tokens if that category exists, else `"2px"`.
+- **`gap`** is emitted only for containers with two or more children.
 
 ## Figma rules for designers
 

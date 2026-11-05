@@ -2,9 +2,17 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from .naming import camel
+
+_NON_ALNUM = re.compile(r"[^a-z0-9]")
+
+
+def normalize_name(name: str) -> str:
+    """'Carbon / Darkest' -> 'carbondarkest'; 'carbon.darkest' -> 'carbondarkest'."""
+    return _NON_ALNUM.sub("", (name or "").lower())
 
 
 def normalize_hex(value: str) -> str:
@@ -77,13 +85,26 @@ class DesignSystem:
                 return path
         return None
 
+    def token_by_name(self, category: str, style_name: str | None) -> str | None:
+        """Match a Figma style name to a token path in `category`, ignoring case and punctuation:
+        'Carbon / Darkest' -> 'color.carbon.darkest', 'Heading/L' -> 'typography.heading/l'."""
+        wanted = normalize_name(style_name or "")
+        if not wanted:
+            return None
+        for path in self.tokens:
+            cat, _, rest = path.partition(".")
+            if cat == category and normalize_name(rest) == wanted:
+                return path
+        return None
+
+    def has_category(self, category: str) -> bool:
+        return any(p.partition(".")[0] == category for p in self.tokens)
+
     def typography_token(self, style_name: str | None, font_size: float | None, font_weight: float | None) -> str | None:
         typo = {p: t for p, t in self.tokens.items() if p.startswith("typography.")}
-        if style_name:
-            wanted = style_name.replace(" ", "").lower()
-            for path in typo:
-                if path.split(".", 1)[1].replace(" ", "").lower() == wanted:
-                    return path
+        by_name = self.token_by_name("typography", style_name)
+        if by_name:
+            return by_name
         if font_size is not None:
             for path, t in typo.items():
                 v = t["value"] if isinstance(t["value"], dict) else {}

@@ -15,9 +15,10 @@ PLATFORMS = {
         "banned": "Material components (material3 Button, TextField, ...), raw dp/sp values, Color(0x...) or fontSize",
         "shape": """\
 - {package_line}
-- `data class {name}State(...)` with one `String` property per binding (default ""): {bindings}
+- `data class {name}State(...)` with exactly these properties: {state_props}
 - `@Composable fun {name}(state: {name}State, {params}modifier: Modifier = Modifier)`
-  - one `on<Binding>Change: (String) -> Unit` per binding, one `() -> Unit` per event: {events}
+  - one `on<Binding>Change: (<Type>) -> Unit` per binding, typed like its state property, \
+and one `() -> Unit` per event: {events}
 - A private `@Preview` composable `{name}Preview()` at the end of the file.""",
     },
     "swiftui": {
@@ -26,7 +27,7 @@ PLATFORMS = {
         "ext": ".swift",
         "banned": "SwiftUI Button/TextField, raw numbers for padding/spacing/radius, Color literals or .font(.system(...))",
         "shape": """\
-- `struct {name}State` with one `var` of type `String` per binding (default ""): {bindings}
+- `struct {name}State` with exactly these properties: {state_props}
 - `struct {name}: View` with `@Binding var state: {name}State` and one `let <event>: () -> Void` per event: {events}
 - Bind inputs with `$state.<binding>`.
 - A `#Preview` at the end of the file.""",
@@ -40,11 +41,38 @@ Hard rules:
 2. Use ONLY design tokens, written exactly as the code expressions in the token table.
 3. A spec value starting with "raw:" has no token: use the closest token from the table and add `// TODO(design): <what>` on that line.
 4. A node with "type": "Unmapped" has no UIKit equivalent: put `// TODO(design): <name> is not in UIKit` at that position. Do not invent components.
+   A node with "type": "Graphic" is hand-drawn artwork: put a placeholder of its `sizePx` there with `// TODO(design): export <name> as an asset`.
+   A layout node with "figmaComponent" is an unmapped library component expanded into plain layout: build its children normally.
 5. The screen is stateless: data comes in through the state object, user actions go out through callbacks. No ViewModel, navigation, networking or side effects.
 6. Keep the layer structure of the spec (Column/Row/Box nesting, order of children).
 7. If you are unsure of a component's API, call `get_component_docs`. To see how existing screens are written, use `search_code` / `read_file` if available.
 8. Your final answer must be exactly one ```{fence} code block containing the complete file, and nothing else.
 """
+
+
+# stateType -> (type, default) per platform.
+STATE_TYPES = {
+    "compose": {"String": ("String", '""'), "Boolean": ("Boolean", "false"), "Int": ("Int", "0")},
+    "swiftui": {"String": ("String", '""'), "Boolean": ("Bool", "false"), "Int": ("Int", "0")},
+}
+
+
+def typed_bindings(ds: DesignSystem, spec_root: dict, platform: str) -> list[tuple[str, str, str]]:
+    """[(binding, type, default)] in tree order; the type comes from the component's `stateType`."""
+    types = STATE_TYPES[platform]
+    found: list[tuple[str, str, str]] = []
+
+    def walk(node: dict) -> None:
+        if "binding" in node:
+            comp = ds.component(node.get("component", "")) or {}
+            state_type = comp.get("stateType", "String")
+            typ, default = types.get(state_type, types["String"])
+            found.append((node["binding"], typ, default))
+        for c in node.get("children", []) or []:
+            walk(c)
+
+    walk(spec_root)
+    return found
 
 
 def load_examples(examples_dir: str | None, platform: str, limit: int) -> list[tuple[str, str]]:
@@ -79,7 +107,7 @@ def user_prompt(
 ) -> str:
     p = PLATFORMS[platform]
     spec = result.spec
-    bindings = collect(spec["root"], "binding")
+    bindings = typed_bindings(ds, spec["root"], platform)
     events = collect(spec["root"], "event")
 
     comp_docs = [ds.component_doc(name, platform) for name in sorted(result.used_components)]
@@ -87,14 +115,16 @@ def user_prompt(
     primitives = ds.primitives(platform)
 
     if platform == "compose":
-        params = "".join(f"on{b[:1].upper() + b[1:]}Change: (String) -> Unit, " for b in bindings)
+        state_props = [f"`val {b}: {t} = {d}`" for b, t, d in bindings]
+        params = "".join(f"on{b[:1].upper() + b[1:]}Change: ({t}) -> Unit, " for b, t, _ in bindings)
         params += "".join(f"{e}: () -> Unit, " for e in events)
     else:
+        state_props = [f"`var {b}: {t} = {d}`" for b, t, d in bindings]
         params = ""
     shape = p["shape"].format(
         name=screen_name,
         package_line=f"`package {package}` as the first line" if package else "no package line needed",
-        bindings=", ".join(bindings) or "(none)",
+        state_props=", ".join(state_props) or "(none)",
         events=", ".join(events) or "(none)",
         params=params,
     )
