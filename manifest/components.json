@@ -97,6 +97,58 @@
         "signature": "UIKitLink(_ title: String, action: @escaping () -> Void)",
         "example": "UIKitLink(\"Forgot password?\", action: onForgotPassword)"
       }
+    },
+    {
+      "figma": "Check Box",
+      "kind": "input",
+      "description": "Checkbox / selection indicator. Binds a Boolean; for single-choice lists bind each row to `selected == option`.",
+      "props": {},
+      "compose": {
+        "import": "com.company.uikit.selection.UiCheckBox",
+        "signature": "UiCheckBox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier)",
+        "example": "UiCheckBox(checked = state.passport, onCheckedChange = onPassportChange)"
+      },
+      "swiftui": {
+        "import": "CompanyUIKit",
+        "signature": "UIKitCheckBox(isOn: Binding<Bool>, isEnabled: Bool = true)",
+        "example": "UIKitCheckBox(isOn: $state.passport)"
+      }
+    },
+    {
+      "figma": "Top Navigation Bar",
+      "kind": "action",
+      "description": "Screen header with back button and title. The event is the back action.",
+      "props": {
+        "title": { "figmaText": "Title" }
+      },
+      "compose": {
+        "import": "com.company.uikit.navigation.UiTopBar",
+        "signature": "UiTopBar(title: String, onBack: (() -> Unit)? = null, modifier: Modifier = Modifier)",
+        "example": "UiTopBar(title = \"Identity Verification\", onBack = onBack)"
+      },
+      "swiftui": {
+        "import": "CompanyUIKit",
+        "signature": "UIKitTopBar(_ title: String, onBack: (() -> Void)? = nil)",
+        "example": "UIKitTopBar(\"Identity Verification\", onBack: onBack)"
+      }
+    },
+    {
+      "figma": "Fixed Footer Action",
+      "kind": "action",
+      "description": "Primary action pinned to the bottom of the screen, above the system navigation bar.",
+      "props": {
+        "text": { "figmaText": "Label" }
+      },
+      "compose": {
+        "import": "com.company.uikit.button.UiFooterAction",
+        "signature": "UiFooterAction(text: String, onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier)",
+        "example": "UiFooterAction(text = \"Continue\", onClick = onContinue)"
+      },
+      "swiftui": {
+        "import": "CompanyUIKit",
+        "signature": "UIKitFooterAction(_ title: String, isEnabled: Bool = true, action: @escaping () -> Void)",
+        "example": "UIKitFooterAction(\"Continue\", action: onContinue)"
+      }
     }
   ]
 }
