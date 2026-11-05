@@ -1,0 +1,382 @@
+{
+ "name": "App",
+ "nodes": {
+  "12:300": {
+   "document": {
+    "id": "12:300",
+    "name": "Login Screen",
+    "type": "FRAME",
+    "layoutMode": "VERTICAL",
+    "paddingLeft": 24,
+    "paddingRight": 24,
+    "paddingTop": 32,
+    "paddingBottom": 32,
+    "itemSpacing": 16,
+    "fills": [
+     {
+      "type": "SOLID",
+      "visible": true,
+      "color": {
+       "r": 1.0,
+       "g": 1.0,
+       "b": 1.0,
+       "a": 1
+      }
+     }
+    ],
+    "children": [
+     {
+      "id": "12:301",
+      "name": "Title",
+      "type": "TEXT",
+      "characters": "Welcome back",
+      "style": {
+       "fontSize": 28,
+       "fontWeight": 700
+      },
+      "fills": [
+       {
+        "type": "SOLID",
+        "visible": true,
+        "color": {
+         "r": 0.06666666666666667,
+         "g": 0.09411764705882353,
+         "b": 0.15294117647058825,
+         "a": 1
+        }
+       }
+      ],
+      "styles": {
+       "text": "S:heading"
+      }
+     },
+     {
+      "id": "12:302",
+      "name": "Subtitle",
+      "type": "TEXT",
+      "characters": "Log in to continue",
+      "style": {
+       "fontSize": 16,
+       "fontWeight": 400
+      },
+      "fills": [
+       {
+        "type": "SOLID",
+        "visible": true,
+        "color": {
+         "r": 0.4196078431372549,
+         "g": 0.4470588235294118,
+         "b": 0.5019607843137255,
+         "a": 1
+        }
+       }
+      ]
+     },
+     {
+      "id": "12:303",
+      "name": "Spacer",
+      "type": "FRAME",
+      "layoutMode": "NONE",
+      "fills": [],
+      "absoluteBoundingBox": {
+       "x": 0,
+       "y": 0,
+       "width": 327,
+       "height": 8
+      },
+      "children": []
+     },
+     {
+      "id": "12:310",
+      "name": "EmailField",
+      "type": "INSTANCE",
+      "componentId": "1:10",
+      "layoutSizingHorizontal": "FILL",
+      "componentProperties": {
+       "Type": {
+        "type": "VARIANT",
+        "value": "Text"
+       },
+       "State": {
+        "type": "VARIANT",
+        "value": "Default"
+       }
+      },
+      "children": [
+       {
+        "id": "12:311",
+        "name": "Label",
+        "type": "TEXT",
+        "characters": "Email",
+        "style": {
+         "fontSize": 16,
+         "fontWeight": 400
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "visible": true,
+          "color": {
+           "r": 0.06666666666666667,
+           "g": 0.09411764705882353,
+           "b": 0.15294117647058825,
+           "a": 1
+          }
+         }
+        ]
+       },
+       {
+        "id": "12:312",
+        "name": "Placeholder",
+        "type": "TEXT",
+        "characters": "name@company.com",
+        "style": {
+         "fontSize": 16,
+         "fontWeight": 400
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "visible": true,
+          "color": {
+           "r": 0.4196078431372549,
+           "g": 0.4470588235294118,
+           "b": 0.5019607843137255,
+           "a": 1
+          }
+         }
+        ]
+       },
+       {
+        "id": "12:313",
+        "name": "Error",
+        "type": "TEXT",
+        "characters": "Invalid email",
+        "style": {
+         "fontSize": 16,
+         "fontWeight": 400
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "visible": true,
+          "color": {
+           "r": 0.06666666666666667,
+           "g": 0.09411764705882353,
+           "b": 0.15294117647058825,
+           "a": 1
+          }
+         }
+        ],
+        "visible": false
+       }
+      ]
+     },
+     {
+      "id": "12:320",
+      "name": "PasswordField",
+      "type": "INSTANCE",
+      "componentId": "1:11",
+      "layoutSizingHorizontal": "FILL",
+      "componentProperties": {
+       "Type": {
+        "type": "VARIANT",
+        "value": "Password"
+       },
+       "State": {
+        "type": "VARIANT",
+        "value": "Default"
+       }
+      },
+      "children": [
+       {
+        "id": "12:321",
+        "name": "Label",
+        "type": "TEXT",
+        "characters": "Password",
+        "style": {
+         "fontSize": 16,
+         "fontWeight": 400
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "visible": true,
+          "color": {
+           "r": 0.06666666666666667,
+           "g": 0.09411764705882353,
+           "b": 0.15294117647058825,
+           "a": 1
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "12:330",
+      "name": "ForgotRow",
+      "type": "FRAME",
+      "layoutMode": "HORIZONTAL",
+      "primaryAxisAlignItems": "MAX",
+      "layoutSizingHorizontal": "FILL",
+      "fills": [],
+      "children": [
+       {
+        "id": "12:331",
+        "name": "ForgotPasswordLink",
+        "type": "INSTANCE",
+        "componentId": "1:20",
+        "componentProperties": {},
+        "children": [
+         {
+          "id": "12:332",
+          "name": "Label",
+          "type": "TEXT",
+          "characters": "Forgot password?",
+          "style": {
+           "fontSize": 16,
+           "fontWeight": 400
+          },
+          "fills": [
+           {
+            "type": "SOLID",
+            "visible": true,
+            "color": {
+             "r": 0.1450980392156863,
+             "g": 0.38823529411764707,
+             "b": 0.9215686274509803,
+             "a": 1
+            }
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "12:340",
+      "name": "Spacer",
+      "type": "FRAME",
+      "layoutMode": "NONE",
+      "layoutGrow": 1,
+      "fills": [],
+      "children": []
+     },
+     {
+      "id": "12:350",
+      "name": "LoginButton",
+      "type": "INSTANCE",
+      "componentId": "1:30",
+      "layoutSizingHorizontal": "FILL",
+      "componentProperties": {
+       "Style#1:0": {
+        "type": "VARIANT",
+        "value": "Primary"
+       },
+       "Size#1:1": {
+        "type": "VARIANT",
+        "value": "L"
+       },
+       "State#1:2": {
+        "type": "VARIANT",
+        "value": "Default"
+       }
+      },
+      "children": [
+       {
+        "id": "12:351",
+        "name": "Label",
+        "type": "TEXT",
+        "characters": "Log in",
+        "style": {
+         "fontSize": 16,
+         "fontWeight": 400
+        },
+        "fills": [
+         {
+          "type": "SOLID",
+          "visible": true,
+          "color": {
+           "r": 1.0,
+           "g": 1.0,
+           "b": 1.0,
+           "a": 1
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "12:360",
+      "name": "Decoration",
+      "type": "RECTANGLE",
+      "fills": [
+       {
+        "type": "SOLID",
+        "visible": true,
+        "color": {
+         "r": 1.0,
+         "g": 0.0,
+         "b": 0.6666666666666666,
+         "a": 1
+        }
+       }
+      ]
+     },
+     {
+      "id": "12:370",
+      "name": "PromoBanner",
+      "type": "INSTANCE",
+      "componentId": "9:99",
+      "children": []
+     }
+    ]
+   },
+   "components": {
+    "1:10": {
+     "key": "tf-text",
+     "name": "Type=Text, State=Default",
+     "componentSetId": "1:9"
+    },
+    "1:11": {
+     "key": "tf-pass",
+     "name": "Type=Password, State=Default",
+     "componentSetId": "1:9"
+    },
+    "1:20": {
+     "key": "k1l2m3n4o5",
+     "name": "Link"
+    },
+    "1:30": {
+     "key": "btn-pl",
+     "name": "Style=Primary, Size=L, State=Default",
+     "componentSetId": "1:29"
+    },
+    "9:99": {
+     "key": "zzz",
+     "name": "Promo Banner"
+    }
+   },
+   "componentSets": {
+    "1:9": {
+     "key": "f6g7h8i9j0",
+     "name": "TextField"
+    },
+    "1:29": {
+     "key": "a1b2c3d4e5",
+     "name": "Button"
+    }
+   },
+   "styles": {
+    "S:heading": {
+     "key": "s1",
+     "name": "Heading/L",
+     "styleType": "TEXT"
+    }
+   }
+  }
+ }
+}

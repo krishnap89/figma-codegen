@@ -1,0 +1,102 @@
+{
+  "version": "0.1.0",
+  "tokenCode": {
+    "compose": "AppTheme.{category}.{name}",
+    "swiftui": "Theme.{category}.{name}"
+  },
+  "categoryCode": {
+    "color": "colors",
+    "spacing": "spacing",
+    "radius": "radius",
+    "typography": "typography"
+  },
+  "primitives": {
+    "compose": {
+      "Column": "Column(modifier, verticalArrangement = Arrangement.spacedBy(<gap token>), horizontalAlignment = Alignment.Start|CenterHorizontally|End)",
+      "Row": "Row(modifier, horizontalArrangement = Arrangement.spacedBy(<gap token>) | Arrangement.End | Arrangement.SpaceBetween, verticalAlignment = Alignment.Top|CenterVertically|Bottom)",
+      "Box": "Box(modifier)",
+      "Spacer": "Spacer(Modifier.height(<size token>)) inside Column, Spacer(Modifier.width(<size token>)) inside Row, Spacer(Modifier.weight(1f)) for weight",
+      "Text": "UiText(text = \"...\", style = <typography token>, color = <color token>)",
+      "padding": "Modifier.padding(horizontal = <token>, vertical = <token>)",
+      "background": "Modifier.background(<color token>)",
+      "fill": "maxSize -> Modifier.fillMaxSize(), maxWidth -> Modifier.fillMaxWidth()",
+      "imports": "com.company.uikit.theme.AppTheme, com.company.uikit.text.UiText"
+    },
+    "swiftui": {
+      "Column": "VStack(alignment: .leading|.center|.trailing, spacing: <gap token>) { ... }",
+      "Row": "HStack(alignment: .top|.center|.bottom, spacing: <gap token>) { ... }",
+      "Box": "ZStack { ... }",
+      "Spacer": "Spacer().frame(height: <size token>) inside VStack, Spacer().frame(width: <size token>) inside HStack, Spacer() for weight",
+      "Text": "UIKitText(\"...\", style: <typography token>, color: <color token>)",
+      "padding": ".padding(.horizontal, <token>).padding(.vertical, <token>)",
+      "background": ".background(<color token>)",
+      "fill": "maxSize -> .frame(maxWidth: .infinity, maxHeight: .infinity), maxWidth -> .frame(maxWidth: .infinity)",
+      "imports": "SwiftUI, CompanyUIKit"
+    }
+  },
+  "components": [
+    {
+      "figma": "Button",
+      "figmaKey": "a1b2c3d4e5",
+      "kind": "action",
+      "description": "Primary action button. Use one Primary per screen.",
+      "props": {
+        "style": { "figmaProp": "Style", "values": ["Primary", "Secondary", "Text"] },
+        "size": { "figmaProp": "Size", "values": ["S", "M", "L"] },
+        "enabled": { "figmaProp": "State", "map": { "Default": true, "Disabled": false } },
+        "text": { "figmaText": "Label" }
+      },
+      "compose": {
+        "import": "com.company.uikit.button.UiButton",
+        "signature": "UiButton(text: String, onClick: () -> Unit, style: UiButtonStyle = UiButtonStyle.Primary, size: UiButtonSize = UiButtonSize.M, enabled: Boolean = true, modifier: Modifier = Modifier)",
+        "example": "UiButton(text = \"Continue\", onClick = onContinue, style = UiButtonStyle.Primary, size = UiButtonSize.L)"
+      },
+      "swiftui": {
+        "import": "CompanyUIKit",
+        "signature": "UIKitButton(_ title: String, style: UIKitButtonStyle = .primary, size: UIKitButtonSize = .m, isEnabled: Bool = true, action: @escaping () -> Void)",
+        "example": "UIKitButton(\"Continue\", style: .primary, size: .l, action: onContinue)"
+      }
+    },
+    {
+      "figma": "TextField",
+      "figmaKey": "f6g7h8i9j0",
+      "kind": "input",
+      "description": "Single-line input with label, optional placeholder and error text.",
+      "props": {
+        "label": { "figmaText": "Label" },
+        "placeholder": { "figmaText": "Placeholder" },
+        "isSecure": { "figmaProp": "Type", "map": { "Text": false, "Password": true } },
+        "error": { "figmaText": "Error" }
+      },
+      "compose": {
+        "import": "com.company.uikit.input.UiTextField",
+        "signature": "UiTextField(value: String, onValueChange: (String) -> Unit, label: String, placeholder: String? = null, isSecure: Boolean = false, error: String? = null, modifier: Modifier = Modifier)",
+        "example": "UiTextField(value = state.email, onValueChange = onEmailChange, label = \"Email\")"
+      },
+      "swiftui": {
+        "import": "CompanyUIKit",
+        "signature": "UIKitTextField(_ label: String, text: Binding<String>, placeholder: String? = nil, isSecure: Bool = false, error: String? = nil)",
+        "example": "UIKitTextField(\"Email\", text: $state.email)"
+      }
+    },
+    {
+      "figma": "Link",
+      "figmaKey": "k1l2m3n4o5",
+      "kind": "action",
+      "description": "Inline text link.",
+      "props": {
+        "text": { "figmaText": "Label" }
+      },
+      "compose": {
+        "import": "com.company.uikit.text.UiLink",
+        "signature": "UiLink(text: String, onClick: () -> Unit, modifier: Modifier = Modifier)",
+        "example": "UiLink(text = \"Forgot password?\", onClick = onForgotPassword)"
+      },
+      "swiftui": {
+        "import": "CompanyUIKit",
+        "signature": "UIKitLink(_ title: String, action: @escaping () -> Void)",
+        "example": "UIKitLink(\"Forgot password?\", action: onForgotPassword)"
+      }
+    }
+  ]
+}

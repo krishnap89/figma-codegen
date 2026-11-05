@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local config (may hold Figma token / LLM API key) — commit codegen.example.yaml instead
+codegen.yaml
+.env
+
+# Agent traces / generated output
+.codegen/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

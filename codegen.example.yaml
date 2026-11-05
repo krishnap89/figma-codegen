@@ -1,0 +1,41 @@
+# Copy to codegen.yaml and adjust. Relative paths are resolved against this file.
+
+llm:
+  base_url: http://qwen.internal:8000/v1   # your OpenAI-compatible Qwen endpoint
+  model: qwen-coder                        # model name as served (vLLM --served-model-name)
+  api_key: not-needed
+  temperature: 0.1
+  max_tokens: 4096
+
+agent:
+  max_rounds: 4                  # generate → validate → fix rounds
+  max_tool_calls_per_round: 8    # lookup tool calls allowed before the final answer
+  use_tools: true                # false if your server has no tool-calling support
+  max_examples: 2                # few-shot examples per prompt
+
+figma:
+  # token: prefer the FIGMA_TOKEN environment variable
+
+paths:
+  manifest: manifest/components.json
+  tokens: manifest/tokens.json
+  examples: examples
+  traces: .codegen/traces
+  # repo_root: ../android-app    # enables search_code / read_file tools
+
+platforms:
+  compose:
+    # A small Gradle project that already depends on your UIKit. The generated file is
+    # written here and compiled. Keep the Gradle daemon warm for fast rounds.
+    sandbox_file: ../codegen-sandbox-android/app/src/main/java/sandbox/Generated.kt
+    compile_cwd: ../codegen-sandbox-android
+    compile_cmd: ["./gradlew", ":app:compileDebugKotlin", "-q", "--offline"]
+    compile_timeout: 600
+    forbidden_patterns: []       # extra regexes, e.g. "import com.company.legacy"
+  swiftui:
+    # Needs macOS. Use xcodebuild for an iOS target (swift build only builds for macOS).
+    sandbox_file: ../codegen-sandbox-ios/Sandbox/Generated.swift
+    compile_cwd: ../codegen-sandbox-ios
+    compile_cmd: ["xcodebuild", "-scheme", "Sandbox", "-destination", "generic/platform=iOS Simulator", "-quiet", "build"]
+    compile_timeout: 900
+    forbidden_patterns: []
