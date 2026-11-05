@@ -22,6 +22,7 @@ paths:
   examples: examples
   traces: .codegen/traces
   figma_json: .codegen/figma     # every Figma download is saved here (empty = don't save)
+  compare: .codegen/compare      # Figma-vs-code pages from `compare` / `generate --compare`
   # repo_root: ../android-app    # enables search_code / read_file tools
 
 platforms:
@@ -33,6 +34,11 @@ platforms:
     compile_cmd: ["./gradlew", ":app:compileDebugKotlin", "-q", "--offline"]
     compile_timeout: 600
     forbidden_patterns: []       # extra regexes, e.g. "import com.company.legacy"
+    # Visual check (`compare`, `generate --compare`): screenshot test that renders CodegenRenderTarget
+    # to $CODEGEN_RENDER_OUT. See README "Visual check" for the test. --rerun: env vars aren't task inputs.
+    # render_cmd: ["./gradlew", ":app:testDebugUnitTest", "--tests", "sandbox.RenderTest",
+    #              "--rerun", "-q", "--offline"]
+    # render_output: app/build/codegen-render.png   # only if the test can't see $CODEGEN_RENDER_OUT
   swiftui:
     # Needs macOS. Use xcodebuild for an iOS target (swift build only builds for macOS).
     sandbox_file: ../codegen-sandbox-ios/Sandbox/Generated.swift
@@ -40,3 +46,5 @@ platforms:
     compile_cmd: ["xcodebuild", "-scheme", "Sandbox", "-destination", "generic/platform=iOS Simulator", "-quiet", "build"]
     compile_timeout: 900
     forbidden_patterns: []
+    # render_cmd: ["xcodebuild", "test", "-scheme", "Sandbox", "-destination", "platform=iOS Simulator,name=iPhone 16",
+    #              "-only-testing:SandboxTests/RenderTests/testRender", "-quiet"]

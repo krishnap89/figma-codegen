@@ -29,6 +29,13 @@ class PlatformConfig:
     compile_timeout: int = 600
     # Extra regexes that must not appear in generated code (e.g. banned imports).
     forbidden_patterns: list[str] = field(default_factory=list)
+    # Visual check (`compare`, `generate --compare`): a command in the sandbox that screenshots
+    # CodegenRenderTarget (written by the harness to render_entry_file) to $CODEGEN_RENDER_OUT.
+    render_cmd: list[str] | None = None
+    render_cwd: str | None = None          # default: compile_cwd
+    render_entry_file: str | None = None   # default: CodegenRenderTarget.kt/.swift next to sandbox_file
+    render_output: str | None = None       # PNG (or glob) the command writes; default: $CODEGEN_RENDER_OUT
+    render_timeout: int = 600
 
 
 @dataclass
@@ -49,6 +56,8 @@ class Config:
     trace_dir: str = ".codegen/traces"
     # Every Figma download is saved here as <fileKey>_<nodeId>.json (reusable with --figma-json).
     figma_json_dir: str | None = ".codegen/figma"
+    # Side-by-side Figma vs. rendered-screen pages from `compare` / `generate --compare`.
+    compare_dir: str = ".codegen/compare"
     repo_root: str | None = None
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     # Where the config file came from (None = defaults only). Informational.
@@ -76,12 +85,13 @@ ENV_VARS: dict[str, str] = {
     "CODEGEN_EXAMPLES_DIR": "paths.examples",
     "CODEGEN_TRACE_DIR": "paths.traces",
     "CODEGEN_FIGMA_JSON_DIR": "paths.figma_json",
+    "CODEGEN_COMPARE_DIR": "paths.compare",
     "CODEGEN_REPO_ROOT": "paths.repo_root",
 }
 
 _PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.traces", "paths.figma_json",
-              "paths.repo_root"}
-_PLATFORM_PATH_FIELDS = {"sandbox_file", "compile_cwd"}
+              "paths.compare", "paths.repo_root"}
+_PLATFORM_PATH_FIELDS = {"sandbox_file", "compile_cwd", "render_cwd", "render_entry_file", "render_output"}
 _STRING_KEYS = {"llm.base_url", "llm.model", "llm.api_key", "figma.token"}
 
 
@@ -209,19 +219,28 @@ def _from_dict(data: dict, base: Path) -> Config:
     cfg.examples_dir = _resolve(base, paths.get("examples", cfg.examples_dir))
     cfg.trace_dir = _resolve(base, paths.get("traces", cfg.trace_dir))
     cfg.figma_json_dir = _resolve(base, paths.get("figma_json", cfg.figma_json_dir))  # empty/null disables saving
+    cfg.compare_dir = _resolve(base, paths.get("compare") or cfg.compare_dir)
     cfg.repo_root = _resolve(base, paths.get("repo_root"))
+
+    def cmd_list(value: Any) -> list[str] | None:
+        if isinstance(value, str):
+            value = value.split()
+        return [str(c) for c in value] if value else None
 
     for name, pdata in _section(data, "platforms").items():
         pdata = pdata or {}
-        cmd = pdata.get("compile_cmd")
-        if isinstance(cmd, str):
-            cmd = cmd.split()
+        compile_timeout = int(pdata.get("compile_timeout", 600))
         cfg.platforms[name] = PlatformConfig(
             sandbox_file=_resolve(base, pdata.get("sandbox_file")),
-            compile_cmd=[str(c) for c in cmd] if cmd else None,
+            compile_cmd=cmd_list(pdata.get("compile_cmd")),
             compile_cwd=_resolve(base, pdata.get("compile_cwd")),
-            compile_timeout=int(pdata.get("compile_timeout", 600)),
+            compile_timeout=compile_timeout,
             forbidden_patterns=[str(x) for x in (pdata.get("forbidden_patterns") or [])],
+            render_cmd=cmd_list(pdata.get("render_cmd")),
+            render_cwd=_resolve(base, pdata.get("render_cwd")),
+            render_entry_file=_resolve(base, pdata.get("render_entry_file")),
+            render_output=_resolve(base, pdata.get("render_output")),
+            render_timeout=int(pdata.get("render_timeout", compile_timeout)),
         )
     return cfg
 
@@ -241,6 +260,7 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
                   "use_tools": cfg.use_tools, "max_examples": cfg.max_examples},
         "figma": {"token": secret(cfg.figma_token)},
         "paths": {"manifest": cfg.manifest_path, "tokens": cfg.tokens_path, "examples": cfg.examples_dir,
-                  "traces": cfg.trace_dir, "figma_json": cfg.figma_json_dir, "repo_root": cfg.repo_root},
+                  "traces": cfg.trace_dir, "figma_json": cfg.figma_json_dir, "compare": cfg.compare_dir,
+                  "repo_root": cfg.repo_root},
         "platforms": {name: vars(pc) for name, pc in cfg.platforms.items()},
     }

@@ -27,14 +27,30 @@ def parse_figma_url(url: str) -> tuple[str, str]:
 
 
 class FigmaClient:
-    def __init__(self, token: str, timeout: float = 60.0):
+    def __init__(self, token: str, timeout: float = 60.0, transport: httpx.BaseTransport | None = None):
         if not token:
             raise ValueError("FIGMA_TOKEN is not set (env var or figma.token in codegen.yaml)")
         self._client = httpx.Client(
             base_url=FIGMA_API,
             headers={"X-Figma-Token": token},
             timeout=timeout,
+            transport=transport,
         )
+        # Rendered images are served from a CDN URL; don't send the token there.
+        self._cdn = httpx.Client(timeout=timeout, follow_redirects=True, transport=transport)
+
+    def export_image(self, file_key: str, node_id: str, scale: float = 2) -> bytes:
+        """Render one node to PNG with Figma's own renderer (the 'Export' image designers see)."""
+        r = self._client.get(f"/images/{file_key}",
+                             params={"ids": node_id, "format": "png", "scale": scale}, timeout=180)
+        r.raise_for_status()
+        data = r.json()
+        url = (data.get("images") or {}).get(node_id)
+        if not url:
+            raise LookupError(f"Figma could not render node {node_id}: {data.get('err') or 'no image returned'}")
+        img = self._cdn.get(url)
+        img.raise_for_status()
+        return img.content
 
     def get_nodes_response(self, file_key: str, node_id: str) -> dict:
         """The raw /v1/files/:key/nodes response for one node (the format --figma-json reads)."""
@@ -59,6 +75,11 @@ class FigmaClient:
 def default_json_name(file_key: str, node_id: str) -> str:
     """'AbC123', '12:300' -> 'AbC123_12-300.json' (':' is awkward in file names)."""
     return f"{file_key}_{node_id.replace(':', '-')}.json"
+
+
+def default_image_name(file_key: str, node_id: str, scale: float) -> str:
+    """'AbC123', '12:300', 2 -> 'AbC123_12-300@2x.png' (saved next to the JSON)."""
+    return f"{file_key}_{node_id.replace(':', '-')}@{scale:g}x.png"
 
 
 def save_nodes_response(data: dict, path: str | Path) -> Path:

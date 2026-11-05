@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import PlatformConfig
+from .render import write_stub_entry
 
 # (regex, message, skip_if_group1_is_zero)
 DEFAULT_RULES: dict[str, list[tuple[str, str, bool]]] = {
@@ -100,13 +101,14 @@ def check_sandbox(cfg: PlatformConfig) -> None:
         raise SandboxConfigError(f"compile command not found: {exe}")
 
 
-def compile_code(code: str, cfg: PlatformConfig) -> tuple[bool, str, bool]:
+def compile_code(code: str, cfg: PlatformConfig, platform: str = "compose") -> tuple[bool, str, bool]:
     """Returns (ok, output, skipped)."""
     if not cfg.sandbox_file or not cfg.compile_cmd:
         return True, "compile skipped: no sandbox configured", True
     target = Path(cfg.sandbox_file)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(code)
+    write_stub_entry(cfg, platform)
     try:
         r = subprocess.run(
             cfg.compile_cmd,
@@ -126,5 +128,5 @@ def compile_code(code: str, cfg: PlatformConfig) -> tuple[bool, str, bool]:
 
 def validate(code: str, platform: str, cfg: PlatformConfig) -> ValidationResult:
     issues = lint(code, platform, cfg.forbidden_patterns)
-    ok, out, skipped = compile_code(code, cfg)
+    ok, out, skipped = compile_code(code, cfg, platform)
     return ValidationResult(issues, ok, out, skipped)
