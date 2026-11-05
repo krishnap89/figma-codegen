@@ -56,9 +56,13 @@ class ValidationResult:
         return "\n\n".join(parts)
 
 
-def lint(code: str, platform: str, extra_patterns: list[str] | None = None) -> list[str]:
+def lint(code: str, platform: str, extra_patterns: list[str] | None = None,
+         skill_patterns: dict[str, list[str]] | None = None) -> list[str]:
+    """skill_patterns: skill name -> forbidden regexes, only for the skills active in this run."""
     rules = list(DEFAULT_RULES.get(platform, []))
     rules += [(p, f"forbidden pattern '{p}'", False) for p in extra_patterns or []]
+    rules += [(p, f"forbidden by skill '{name}': {p}", False)
+              for name, patterns in (skill_patterns or {}).items() for p in patterns]
     issues = []
     in_preview = False
     for lineno, line in enumerate(code.splitlines(), 1):
@@ -126,7 +130,8 @@ def compile_code(code: str, cfg: PlatformConfig, platform: str = "compose") -> t
     return False, _trim_compiler_output(r.stdout + "\n" + r.stderr), False
 
 
-def validate(code: str, platform: str, cfg: PlatformConfig) -> ValidationResult:
-    issues = lint(code, platform, cfg.forbidden_patterns)
+def validate(code: str, platform: str, cfg: PlatformConfig,
+             skill_patterns: dict[str, list[str]] | None = None) -> ValidationResult:
+    issues = lint(code, platform, cfg.forbidden_patterns, skill_patterns)
     ok, out, skipped = compile_code(code, cfg, platform)
     return ValidationResult(issues, ok, out, skipped)

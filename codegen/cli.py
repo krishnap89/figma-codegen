@@ -7,6 +7,7 @@
   figma-codegen lint LoginScreen.kt --platform compose
   figma-codegen components <library-file-url>        # help build the manifest
   figma-codegen import-compose <uikit-module> --app <app-repo>   # draft manifest + tokens from Kotlin
+  figma-codegen skills                               # list skills and check they are valid
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from .render import RenderConfigError, RenderError, ScreenShape, check_render
 from .render import render as render_screen
 from .report import format_warnings
 from .simplify import SimplifyResult, simplify
+from .skills import SkillPlan, scan_skills, plan_skills
 from .style import Style
 from .validate import SandboxConfigError, check_sandbox, lint
 
@@ -108,8 +110,28 @@ def _load_ds(cfg) -> DesignSystem:
     return DesignSystem.load(cfg.manifest_path, cfg.tokens_path)
 
 
+def _skill_plan(cfg, ds: DesignSystem, spec: dict, platform: str, st: Style,
+                forced=(), auto: bool = True) -> SkillPlan | None:
+    """Load skills (reporting invalid ones) and plan this run; None when there are no skills at all.
+    Raises ValueError for a bad --skill name."""
+    skills, errors = scan_skills(cfg.skills_dir)
+    for e in errors:
+        print(st.warn(f"warning: {e}"))
+    if not skills and not forced:
+        return None
+    return plan_skills(skills, spec, platform, ds, max_chars=cfg.max_skill_chars,
+                       max_examples=cfg.max_examples, forced=forced, auto=auto)
+
+
+def _print_plan(plan: SkillPlan, cfg, st: Style, stream, label: str = "skills", suffix: str = "") -> None:
+    print(f"{label}: {plan.summary()}{suffix}", file=stream)
+    if plan.dropped:
+        print(st.warn(f"  dropped (over agent.max_skill_chars={cfg.max_skill_chars}): "
+                      + ", ".join(s.name for s in plan.dropped)), file=stream)
+
+
 def cmd_spec(args, cfg) -> int:
-    _, result, _ = _simplify(args, cfg, Progress())
+    ds, result, _ = _simplify(args, cfg, Progress())
     text = json.dumps(result.spec, indent=2)
     if args.out:
         Path(args.out).write_text(text)
@@ -118,6 +140,17 @@ def cmd_spec(args, cfg) -> int:
         print(text)
     if result.issues:
         print("\n" + format_warnings(result.issues, args.verbose, Style.for_stream(sys.stderr)), file=sys.stderr)
+    # Which skills `generate` would add (no LLM call). stderr, so stdout stays pure JSON.
+    st = Style.for_stream(sys.stderr)
+    skills, errors = scan_skills(cfg.skills_dir)
+    for e in errors:
+        print(st.warn(f"warning: {e}"), file=sys.stderr)
+    if skills:
+        print(file=sys.stderr)
+        for platform in [args.platform] if args.platform else ["compose", "swiftui"]:
+            plan = plan_skills(skills, result.spec, platform, ds, max_chars=cfg.max_skill_chars,
+                               max_examples=cfg.max_examples)
+            _print_plan(plan, cfg, st, sys.stderr, label=f"skills ({platform})")
     return 0
 
 
@@ -153,12 +186,20 @@ def cmd_generate(args, cfg) -> int:
             print(f"{st.err('error:')} --compare needs the Figma frame URL (or --figma-image PNG)")
             return 2
 
+    try:
+        plan = _skill_plan(cfg, ds, result.spec, args.platform, st, args.skill, not args.no_skills)
+    except ValueError as e:
+        print(f"{st.err('error:')} --skill: {e}")
+        return 2
+    if plan is not None:
+        _print_plan(plan, cfg, st, sys.stdout, suffix=" (auto-selection off: --no-skills)" if args.no_skills else "")
+
     name = args.name or pascal(Path(args.out).stem) or result.spec["screen"]
     print(f"Generating {args.platform} screen {st(name, 'bold')} with {st(cfg.llm_model, 'cyan')} "
           + st.dim(f"@ {cfg.llm_base_url}"))
     agent = CodegenAgent(cfg, ds, progress=progress)
     try:
-        res = agent.run(result, args.platform, name, args.package)
+        res = agent.run(result, args.platform, name, args.package, skills=plan)
     except SandboxConfigError as e:
         print(f"{st.err('error:')} {e}")
         return 2
@@ -289,6 +330,48 @@ def cmd_compare(args, cfg) -> int:
                          name=name, code_label=args.code)
 
 
+def _when_summary(when: dict | None) -> str:
+    if not when:
+        return "only with --skill (no `when`)"
+    if when["always"]:
+        return "always"
+    parts = [f"{x}" + (f" ≥{when['min_count'][x]}" if when["min_count"].get(x, 1) > 1 else "")
+             for key in ("components", "kinds") for x in when[key]]
+    if when["repeated_rows"]:
+        parts.append("repeated rows")
+    return "any of: " + ", ".join(parts) if parts else "never (empty `when`)"
+
+
+def cmd_skills(args, cfg) -> int:
+    st = Style.for_stream(sys.stdout)
+    if not cfg.skills_dir or not Path(cfg.skills_dir).is_dir():
+        print(f"no skills directory at {cfg.skills_dir or '(paths.skills is empty)'}")
+        return 0
+    skills, errors = scan_skills(cfg.skills_dir)
+    try:
+        ds = DesignSystem.load(cfg.manifest_path, cfg.tokens_path)
+    except (OSError, ValueError):
+        ds = None  # manifest checks below are skipped
+    print(f"skills in {cfg.skills_dir}\n")
+    rows = sorted([(s.name, s) for s in skills] + [(e.name, e) for e in errors], key=lambda r: r[0])
+    for _, item in rows:
+        if not hasattr(item, "body"):
+            print(f"{st.mark(False)} {st(item.name, 'bold')}  {st.err('invalid:')} {item.message}")
+            continue
+        s = item
+        n_ex = len(s.examples)
+        print(f"{st.mark(True)} {st(s.name, 'bold')} — {s.description}")
+        print(st.dim(f"    {', '.join(s.platforms)} · priority {s.priority} · {_when_summary(s.when)}"
+                     + (f" · {n_ex} example{'s' if n_ex != 1 else ''}" if n_ex else "")
+                     + (f" · {len(s.forbidden_patterns)} lint pattern(s)" if s.forbidden_patterns else "")))
+        if ds is not None and s.when:
+            missing = [c for c in s.when["components"] if ds.component(c) is None]
+            if missing:
+                print(st.warn(f"    note: not in the manifest: {', '.join(missing)}"))
+    print(f"\n{len(rows)} skill(s), {len(errors)} invalid")
+    return 1 if errors else 0
+
+
 def cmd_lint(args, cfg) -> int:
     code = Path(args.file).read_text()
     issues = lint(code, args.platform, cfg.platform(args.platform).forbidden_patterns)
@@ -396,6 +479,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--model", help="override llm.model")
     g.add_argument("--no-tools", action="store_true", help="disable tool calling (if your server lacks it)")
     g.add_argument("--strict", action="store_true", help="abort if the Figma frame has warnings")
+    g.add_argument("--skill", action="append", default=[], metavar="NAME",
+                   help="always include this skill (repeatable; see `figma-codegen skills`)")
+    g.add_argument("--no-skills", action="store_true",
+                   help="turn off automatic skill selection (--skill still applies)")
     g.add_argument("--compare", action="store_true",
                    help="after success, render the screen in the sandbox and write a Figma-vs-code page")
     add_visual(g)
@@ -415,7 +502,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("spec", help="print the simplified spec for a frame")
     add_source(s)
     s.add_argument("--out")
+    s.add_argument("--platform", choices=["compose", "swiftui"],
+                   help="show the skills selected for this platform only (default: both)")
     s.set_defaults(func=cmd_spec)
+
+    sk = sub.add_parser("skills", help="list skills with their status; exits 1 if any skill is invalid (for CI)")
+    sk.set_defaults(func=cmd_skills)
 
     l = sub.add_parser("lint", help="design-system lint for a file")
     l.add_argument("file")

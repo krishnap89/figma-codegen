@@ -1,0 +1,229 @@
+## Screen spec (from Figma)
+```json
+{
+ "screen": "LoginScreen",
+ "figmaNode": "12:300",
+ "root": {
+  "type": "Column",
+  "name": "Login Screen",
+  "background": "color.background.primary",
+  "padding": {
+   "horizontal": "spacing.l",
+   "vertical": "spacing.xl"
+  },
+  "gap": "spacing.m",
+  "fill": "maxSize",
+  "children": [
+   {
+    "type": "Text",
+    "name": "Title",
+    "text": "Welcome back",
+    "style": "typography.heading/l",
+    "color": "color.text.primary"
+   },
+   {
+    "type": "Text",
+    "name": "Subtitle",
+    "text": "Log in to continue",
+    "style": "typography.body/m",
+    "color": "color.text.secondary"
+   },
+   {
+    "type": "Spacer",
+    "size": "spacing.s"
+   },
+   {
+    "component": "TextField",
+    "name": "EmailField",
+    "props": {
+     "label": "Email",
+     "placeholder": "name@company.com",
+     "isSecure": false
+    },
+    "binding": "email",
+    "fill": "maxWidth"
+   },
+   {
+    "component": "TextField",
+    "name": "PasswordField",
+    "props": {
+     "label": "Password",
+     "isSecure": true
+    },
+    "binding": "password",
+    "fill": "maxWidth"
+   },
+   {
+    "component": "Link",
+    "name": "ForgotPasswordLink",
+    "props": {
+     "text": "Forgot password?"
+    },
+    "event": "onForgotPassword",
+    "fill": "maxWidth"
+   },
+   {
+    "type": "Spacer",
+    "weight": 1
+   },
+   {
+    "component": "Button",
+    "name": "LoginButton",
+    "props": {
+     "style": "Primary",
+     "size": "L",
+     "enabled": true,
+     "text": "Log in"
+    },
+    "event": "onLogin",
+    "fill": "maxWidth"
+   },
+   {
+    "type": "Graphic",
+    "name": "Decoration",
+    "sizePx": "0x0"
+   },
+   {
+    "type": "Unmapped",
+    "name": "PromoBanner",
+    "figmaComponent": "Promo Banner"
+   }
+  ]
+ },
+ "warnings": [
+  "[Decoration 12:360] hand-drawn graphic; use a UIKit Icon/Image/component, or export it as an asset",
+  "[PromoBanner 12:370] instance of 'Promo Banner' is not in the UIKit manifest"
+ ]
+}
+```
+
+## UIKit components used
+```json
+[
+ {
+  "figma": "Button",
+  "description": "Primary action button. Use one Primary per screen.",
+  "props": {
+   "style": {
+    "figmaProp": "Style",
+    "values": [
+     "Primary",
+     "Secondary",
+     "Text"
+    ]
+   },
+   "size": {
+    "figmaProp": "Size",
+    "values": [
+     "S",
+     "M",
+     "L"
+    ]
+   },
+   "enabled": {
+    "figmaProp": "State",
+    "map": {
+     "Default": true,
+     "Disabled": false
+    }
+   },
+   "text": {
+    "figmaText": "Label"
+   }
+  },
+  "compose": {
+   "import": "com.company.uikit.button.UiButton",
+   "signature": "UiButton(text: String, onClick: () -> Unit, style: UiButtonStyle = UiButtonStyle.Primary, size: UiButtonSize = UiButtonSize.M, enabled: Boolean = true, modifier: Modifier = Modifier)",
+   "example": "UiButton(text = \"Continue\", onClick = onContinue, style = UiButtonStyle.Primary, size = UiButtonSize.L)"
+  }
+ },
+ {
+  "figma": "Link",
+  "description": "Inline text link.",
+  "props": {
+   "text": {
+    "figmaText": "Label"
+   }
+  },
+  "compose": {
+   "import": "com.company.uikit.text.UiLink",
+   "signature": "UiLink(text: String, onClick: () -> Unit, modifier: Modifier = Modifier)",
+   "example": "UiLink(text = \"Forgot password?\", onClick = onForgotPassword)"
+  }
+ },
+ {
+  "figma": "TextField",
+  "description": "Single-line input with label, optional placeholder and error text.",
+  "props": {
+   "label": {
+    "figmaText": "Label"
+   },
+   "placeholder": {
+    "figmaText": "Placeholder"
+   },
+   "isSecure": {
+    "figmaProp": "Type",
+    "map": {
+     "Text": false,
+     "Password": true
+    }
+   },
+   "error": {
+    "figmaText": "Error"
+   }
+  },
+  "compose": {
+   "import": "com.company.uikit.input.UiTextField",
+   "signature": "UiTextField(value: String, onValueChange: (String) -> Unit, label: String, placeholder: String? = null, isSecure: Boolean = false, error: String? = null, modifier: Modifier = Modifier)",
+   "example": "UiTextField(value = state.email, onValueChange = onEmailChange, label = \"Email\")"
+  }
+ }
+]
+```
+
+## Layout primitives
+- Column: `Column(modifier, verticalArrangement = Arrangement.spacedBy(<gap token>), horizontalAlignment = Alignment.Start|CenterHorizontally|End)`
+- Row: `Row(modifier, horizontalArrangement = Arrangement.spacedBy(<gap token>) | Arrangement.End | Arrangement.SpaceBetween, verticalAlignment = Alignment.Top|CenterVertically|Bottom)`
+- Box: `Box(modifier)`
+- Spacer: `Spacer(Modifier.height(<size token>)) inside Column, Spacer(Modifier.width(<size token>)) inside Row, Spacer(Modifier.weight(1f)) for weight`
+- Text: `UiText(text = "...", style = <typography token>, color = <color token>)`
+- padding: `Modifier.padding(horizontal = <token>, vertical = <token>)`
+- background: `Modifier.background(<color token>)`
+- fill: `maxSize -> Modifier.fillMaxSize(), maxWidth -> Modifier.fillMaxWidth()`
+- imports: `com.company.uikit.theme.AppTheme, com.company.uikit.text.UiText`
+
+## Token table (spec token -> code)
+```
+color.background.primary -> AppTheme.colors.backgroundPrimary
+color.text.primary -> AppTheme.colors.textPrimary
+color.text.secondary -> AppTheme.colors.textSecondary
+spacing.l -> AppTheme.spacing.l
+spacing.m -> AppTheme.spacing.m
+spacing.s -> AppTheme.spacing.s
+spacing.xl -> AppTheme.spacing.xl
+typography.body/m -> AppTheme.typography.bodyM
+typography.heading/l -> AppTheme.typography.headingL
+```
+
+## Designer warnings (handle with TODO comments, don't guess)
+- [Decoration 12:360] hand-drawn graphic; use a UIKit Icon/Image/component, or export it as an asset
+- [PromoBanner 12:370] instance of 'Promo Banner' is not in the UIKit manifest
+
+## Reference example 1: spec
+```json
+{"screen": "Ex"}
+```
+## Reference example 1: code written by our team
+```kotlin
+fun Ex() {}
+
+```
+
+## Task
+Generate the Jetpack Compose (Kotlin) file for screen `LoginScreen`.
+Required shape:
+- `package com.company.login` as the first line
+- `data class LoginScreenState(...)` with exactly these properties: `val email: String = ""`, `val password: String = ""`
+- `@Composable fun LoginScreen(state: LoginScreenState, onEmailChange: (String) -> Unit, onPasswordChange: (String) -> Unit, onForgotPassword: () -> Unit, onLogin: () -> Unit, modifier: Modifier = Modifier)`
+  - one `on<Binding>Change: (<Type>) -> Unit` per binding, typed like its state property, and one `() -> Unit` per event: onForgotPassword, onLogin
+- A private `@Preview` composable `LoginScreenPreview()` at the end of the file.

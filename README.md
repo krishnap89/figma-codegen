@@ -75,8 +75,10 @@ Every setting can be supplied without touching the project's `codegen.yaml`. Pre
 | `CODEGEN_MAX_TOOL_CALLS` | `agent.max_tool_calls_per_round` |
 | `CODEGEN_USE_TOOLS` | `agent.use_tools` (`true`/`false`) |
 | `CODEGEN_MAX_EXAMPLES` | `agent.max_examples` |
+| `CODEGEN_MAX_SKILL_CHARS` | `agent.max_skill_chars` |
+| `CODEGEN_SKILL_TOOL` | `agent.skill_tool` (`true`/`false`) |
 | `FIGMA_TOKEN` / `CODEGEN_FIGMA_TOKEN` | `figma.token` |
-| `CODEGEN_MANIFEST`, `CODEGEN_TOKENS`, `CODEGEN_EXAMPLES_DIR`, `CODEGEN_TRACE_DIR`, `CODEGEN_FIGMA_JSON_DIR`, `CODEGEN_COMPARE_DIR`, `CODEGEN_REPO_ROOT` | `paths.*` |
+| `CODEGEN_MANIFEST`, `CODEGEN_TOKENS`, `CODEGEN_EXAMPLES_DIR`, `CODEGEN_SKILLS_DIR`, `CODEGEN_TRACE_DIR`, `CODEGEN_FIGMA_JSON_DIR`, `CODEGEN_COMPARE_DIR`, `CODEGEN_REPO_ROOT` | `paths.*` |
 
 `--set` reaches any key, including per-platform ones; values are parsed as YAML so numbers,
 booleans and lists work:
@@ -159,6 +161,87 @@ Without a sandbox, only the lint runs and the CLI says so.
 
 See `examples/README.md`. Two real screens from your codebase usually help more than any prompt tweak.
 
+## Skills
+
+A skill is a small folder of team conventions that goes into the prompt **only when the screen needs it**:
+form rules for forms, list rules for lists. Prompts stay short, and teams can add conventions without
+editing `codegen/prompts.py`. Three starter skills are in `skills/`: `compose-conventions`, `forms` and
+`selection-list`. Fill in their `TODO(uikit)` lines with your real APIs.
+
+```
+skills/forms/
+  SKILL.md                  # front matter + instructions (required)
+  examples/                 # optional: <Name>.kt / <Name>.swift, each optionally with <Name>.spec.json
+```
+
+```markdown
+---
+name: forms                      # must equal the folder name
+description: Forms with text inputs, validation and a submit action
+platforms: [compose, swiftui]    # default: both
+when:                            # no `when` = only with --skill (or load_skill)
+  always: false                  # true = every run on these platforms
+  components: [TextField]        # any of these manifest components in the spec...
+  min_count: {TextField: 2}      # ...at least this often (keys from `components` or `kinds`; default 1)
+  kinds: [input]                 # any component with this manifest `kind`
+  repeated_rows: false           # a container with 3+ child containers of the same structure
+forbidden_patterns: []           # extra lint regexes, active only when this skill is in the prompt
+priority: 50                     # higher goes first, and is dropped last (default 50)
+---
+- Short rules, one per line.
+```
+
+**Selection** is deterministic and uses only the simplified spec, never the model. A skill is picked if
+its platform matches and `always` is true or **any** `when` condition holds. The match says why, and
+`generate` prints it:
+
+```
+skills: compose-conventions (always), forms (kinds: input ×2)
+```
+
+`repeated_rows` compares the structure of sibling containers: types and components, recursively, ignoring
+texts and names. Four option rows with a checkbox and a label match; two rows, or rows with different
+children, don't.
+
+**In the prompt**, picked skills appear in priority order under `## Team conventions for this screen`,
+just before `## Task`. With no skills, the prompt is exactly what it was before skills existed. Skill
+examples count toward `agent.max_examples` before the global `examples/`, which fill any remaining slots.
+A picked skill's `forbidden_patterns` join the lint for that run, reported as
+`forbidden by skill 'forms': <pattern>`.
+
+**Budget:** `agent.max_skill_chars` (default 6000) caps the skill text (bodies + examples) per prompt.
+Over budget, the lowest-priority skills are dropped first and the CLI names them. Skills forced with
+`--skill` are never dropped.
+
+**Model-chosen skills** (`agent.skill_tool: true`, off by default): the system prompt also lists the skills
+that weren't picked (name + description), and the model can call `load_skill(name)`. Loaded text counts
+against the same budget, and its lint patterns apply too.
+
+```bash
+figma-codegen skills                                  # list skills + validation; exit 1 if any is invalid (CI)
+figma-codegen spec <frame-url>                        # also shows which skills generate would pick, and why
+figma-codegen generate <frame-url> ... --skill forms  # force a skill (repeatable)
+figma-codegen generate <frame-url> ... --no-skills    # no automatic selection (--skill still applies)
+```
+
+The trace's `start` event records the skills, their reasons, the dropped skills and the total skill
+characters. `load_skill` calls are traced like other tools. Invalid skills (missing `SKILL.md`, bad YAML,
+a name that doesn't match the folder, an unknown `when` key, a broken regex) are skipped with a warning.
+They never stop a run.
+
+### Writing a good skill
+
+- **Short rules, not prose.** A mid-size model follows ten bullet points better than three paragraphs.
+  Keep `SKILL.md` under about 40 lines and end with a short *Do / Don't* list.
+- **One example at most**, and a short one. Examples take few-shot slots and budget.
+- **Don't fight the harness.** The required screen shape (state properties, callbacks) is fixed by
+  `prompts.py`. When a convention needs something the shape doesn't have, tell the model to add a
+  `// TODO(state): ...` instead of changing the shape.
+- **Narrow `when` conditions.** A skill that is always picked is part of the system prompt in all but name.
+- **Enforce what matters** with `forbidden_patterns`, so the fix loop catches violations.
+- **Measure.** Run the evaluation set (see Next steps) with and without the skill (`--no-skills`,
+  `--skill`). Keep it only if the output gets better.
+
 ## Commands
 
 ```bash
@@ -168,10 +251,12 @@ figma-codegen generate <frame-url> --platform compose --out LoginScreen.kt --pac
 figma-codegen generate <frame-url> --platform swiftui --out LoginScreen.swift --repo ../ios-app
 figma-codegen lint LoginScreen.kt --platform compose
 figma-codegen components <library-file-url>          # list library components + keys (manifest work)
+figma-codegen skills                                 # list skills and check they are valid
 figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export vs. rendered code
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--model`,
+`--skill NAME` / `--no-skills` (see [Skills](#skills)),
 `--repo` (enables code search tools), `--figma-json` (offline: saved `/v1/files/:key/nodes` response),
 `-v/--verbose` (also on `spec`: list every Figma warning).
 
@@ -339,6 +424,7 @@ Run `figma-codegen spec` on a frame to see its warnings.
 | want to change | file |
 |---|---|
 | lint rules (raw dp, banned imports…) | `codegen/validate.py` → `DEFAULT_RULES`, or `forbidden_patterns` in config |
+| team conventions for some screens (forms, lists…) | `skills/<name>/SKILL.md` (see [Skills](#skills)) |
 | generated screen shape (state, callbacks, preview) | `codegen/prompts.py` → `PLATFORMS[...]["shape"]` |
 | system rules | `codegen/prompts.py` → `SYSTEM` |
 | Figma → spec mapping | `codegen/simplify.py` |

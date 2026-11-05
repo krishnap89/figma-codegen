@@ -77,7 +77,7 @@ def typed_bindings(ds: DesignSystem, spec_root: dict, platform: str) -> list[tup
 
 def load_examples(examples_dir: str | None, platform: str, limit: int) -> list[tuple[str, str]]:
     """Few-shot pairs: examples/<platform>/<Name>.spec.json + <Name>.kt|.swift"""
-    if not examples_dir:
+    if not examples_dir or limit <= 0:
         return []
     d = Path(examples_dir) / platform
     if not d.is_dir():
@@ -92,9 +92,15 @@ def load_examples(examples_dir: str | None, platform: str, limit: int) -> list[t
     return pairs
 
 
-def system_prompt(platform: str) -> str:
+def system_prompt(platform: str, skill_catalog: list | None = None) -> str:
+    """skill_catalog: (name, description) of skills the model may pull in with `load_skill`."""
     p = PLATFORMS[platform]
-    return SYSTEM.format(label=p["label"], banned=p["banned"], fence=p["fence"])
+    text = SYSTEM.format(label=p["label"], banned=p["banned"], fence=p["fence"])
+    if skill_catalog:
+        text += ("\nMore team conventions exist for specific situations. If one applies to this screen, "
+                 "call `load_skill` with its name before writing code:\n"
+                 + "\n".join(f"- {name}: {desc}" for name, desc in skill_catalog) + "\n")
+    return text
 
 
 def user_prompt(
@@ -104,7 +110,9 @@ def user_prompt(
     screen_name: str,
     package: str | None,
     examples: list[tuple[str, str]],
+    conventions: list[str] | None = None,
 ) -> str:
+    """conventions: rendered skill blocks (see skills.py); none keeps the prompt unchanged."""
     p = PLATFORMS[platform]
     spec = result.spec
     bindings = typed_bindings(ds, spec["root"], platform)
@@ -140,6 +148,8 @@ def user_prompt(
     for i, (ex_spec, ex_code) in enumerate(examples, 1):
         parts.append(f"## Reference example {i}: spec\n```json\n{ex_spec}\n```\n"
                      f"## Reference example {i}: code written by our team\n```{p['fence']}\n{ex_code}\n```")
+    if conventions:
+        parts.append("## Team conventions for this screen\n" + "\n\n".join(conventions))
     parts.append(f"## Task\nGenerate the {p['label']} file for screen `{screen_name}`.\nRequired shape:\n{shape}")
     return "\n\n".join(parts)
 

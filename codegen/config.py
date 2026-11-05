@@ -53,6 +53,10 @@ class Config:
     tokens_path: str = "manifest/tokens.json"
     examples_dir: str = "examples"
     max_examples: int = 2
+    # Skills: team conventions added to the prompt only when a screen needs them (see skills.py).
+    skills_dir: str | None = "skills"
+    max_skill_chars: int = 6000    # skill bodies + examples per prompt; lowest priority dropped first
+    skill_tool: bool = False       # offer `load_skill` so the model can pull in unselected skills
     trace_dir: str = ".codegen/traces"
     # Every Figma download is saved here as <fileKey>_<nodeId>.json (reusable with --figma-json).
     figma_json_dir: str | None = ".codegen/figma"
@@ -78,19 +82,22 @@ ENV_VARS: dict[str, str] = {
     "CODEGEN_MAX_TOOL_CALLS": "agent.max_tool_calls_per_round",
     "CODEGEN_USE_TOOLS": "agent.use_tools",
     "CODEGEN_MAX_EXAMPLES": "agent.max_examples",
+    "CODEGEN_MAX_SKILL_CHARS": "agent.max_skill_chars",
+    "CODEGEN_SKILL_TOOL": "agent.skill_tool",
     "FIGMA_TOKEN": "figma.token",
     "CODEGEN_FIGMA_TOKEN": "figma.token",
     "CODEGEN_MANIFEST": "paths.manifest",
     "CODEGEN_TOKENS": "paths.tokens",
     "CODEGEN_EXAMPLES_DIR": "paths.examples",
+    "CODEGEN_SKILLS_DIR": "paths.skills",
     "CODEGEN_TRACE_DIR": "paths.traces",
     "CODEGEN_FIGMA_JSON_DIR": "paths.figma_json",
     "CODEGEN_COMPARE_DIR": "paths.compare",
     "CODEGEN_REPO_ROOT": "paths.repo_root",
 }
 
-_PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.traces", "paths.figma_json",
-              "paths.compare", "paths.repo_root"}
+_PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.skills", "paths.traces",
+              "paths.figma_json", "paths.compare", "paths.repo_root"}
 _PLATFORM_PATH_FIELDS = {"sandbox_file", "compile_cwd", "render_cwd", "render_entry_file", "render_output"}
 _STRING_KEYS = {"llm.base_url", "llm.model", "llm.api_key", "figma.token"}
 
@@ -211,12 +218,15 @@ def _from_dict(data: dict, base: Path) -> Config:
     cfg.max_tool_calls_per_round = int(agent.get("max_tool_calls_per_round", cfg.max_tool_calls_per_round))
     cfg.use_tools = _bool(agent.get("use_tools", cfg.use_tools))
     cfg.max_examples = int(agent.get("max_examples", cfg.max_examples))
+    cfg.max_skill_chars = int(agent.get("max_skill_chars", cfg.max_skill_chars))
+    cfg.skill_tool = _bool(agent.get("skill_tool", cfg.skill_tool))
     token = figma.get("token")
     cfg.figma_token = str(token) if token else None
 
     cfg.manifest_path = _resolve(base, paths.get("manifest", cfg.manifest_path))
     cfg.tokens_path = _resolve(base, paths.get("tokens", cfg.tokens_path))
     cfg.examples_dir = _resolve(base, paths.get("examples", cfg.examples_dir))
+    cfg.skills_dir = _resolve(base, paths.get("skills", cfg.skills_dir))  # empty/null disables skills
     cfg.trace_dir = _resolve(base, paths.get("traces", cfg.trace_dir))
     cfg.figma_json_dir = _resolve(base, paths.get("figma_json", cfg.figma_json_dir))  # empty/null disables saving
     cfg.compare_dir = _resolve(base, paths.get("compare") or cfg.compare_dir)
@@ -257,9 +267,11 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
         "llm": {"base_url": cfg.llm_base_url, "model": cfg.llm_model, "api_key": secret(cfg.llm_api_key),
                 "temperature": cfg.temperature, "max_tokens": cfg.max_tokens},
         "agent": {"max_rounds": cfg.max_rounds, "max_tool_calls_per_round": cfg.max_tool_calls_per_round,
-                  "use_tools": cfg.use_tools, "max_examples": cfg.max_examples},
+                  "use_tools": cfg.use_tools, "max_examples": cfg.max_examples,
+                  "max_skill_chars": cfg.max_skill_chars, "skill_tool": cfg.skill_tool},
         "figma": {"token": secret(cfg.figma_token)},
         "paths": {"manifest": cfg.manifest_path, "tokens": cfg.tokens_path, "examples": cfg.examples_dir,
+                  "skills": cfg.skills_dir,
                   "traces": cfg.trace_dir, "figma_json": cfg.figma_json_dir, "compare": cfg.compare_dir,
                   "repo_root": cfg.repo_root},
         "platforms": {name: vars(pc) for name, pc in cfg.platforms.items()},

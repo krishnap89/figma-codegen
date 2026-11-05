@@ -11,7 +11,9 @@ agent:
   max_rounds: 4                  # generate → validate → fix rounds
   max_tool_calls_per_round: 8    # lookup tool calls allowed before the final answer
   use_tools: true                # false if your server has no tool-calling support
-  max_examples: 2                # few-shot examples per prompt
+  max_examples: 2                # few-shot examples per prompt (skill examples count first)
+  max_skill_chars: 6000          # skill text per prompt; lowest-priority skills are dropped first
+  skill_tool: false              # true: the model may pull in unselected skills with load_skill
 
 figma:
   # token: prefer the FIGMA_TOKEN environment variable
@@ -20,6 +22,7 @@ paths:
   manifest: manifest/components.json
   tokens: manifest/tokens.json
   examples: examples
+  skills: skills                 # team conventions, added only when a screen needs them
   traces: .codegen/traces
   figma_json: .codegen/figma     # every Figma download is saved here (empty = don't save)
   compare: .codegen/compare      # Figma-vs-code pages from `compare` / `generate --compare`

@@ -19,6 +19,7 @@ from .progress import Progress
 from .prompts import (PLATFORMS, fix_prompt, load_examples, no_code_prompt,
                       system_prompt, user_prompt)
 from .simplify import SimplifyResult
+from .skills import SkillLoader, SkillPlan
 from .tools import Tools
 from .validate import ValidationResult, validate
 
@@ -83,16 +84,24 @@ class CodegenAgent:
             client = OpenAI(base_url=cfg.llm_base_url, api_key=cfg.llm_api_key)
         self.client = client
 
-    def run(self, result: SimplifyResult, platform: str, screen_name: str, package: str | None = None) -> AgentResult:
+    def run(self, result: SimplifyResult, platform: str, screen_name: str, package: str | None = None,
+            skills: SkillPlan | None = None) -> AgentResult:
+        """skills: the skill plan for this run (cli.py builds it with skills.plan_skills); None = no skills."""
         tracer = Tracer(self.cfg.trace_dir, screen_name)
-        tools = Tools(self.ds, platform, self.cfg.repo_root)
-        examples = load_examples(self.cfg.examples_dir, platform, self.cfg.max_examples)
+        loader = SkillLoader(skills) if skills is not None and self.cfg.skill_tool else None
+        tools = Tools(self.ds, platform, self.cfg.repo_root, skill_loader=loader)
+        # Skill examples take precedence; global examples fill the remaining few-shot slots.
+        n_global = self.cfg.max_examples - (skills.examples_used if skills else 0)
+        examples = load_examples(self.cfg.examples_dir, platform, n_global)
+        catalog = [(s.name, s.description) for s in loader.catalog()] if loader and self.cfg.use_tools else None
         messages: list[dict] = [
-            {"role": "system", "content": system_prompt(platform)},
-            {"role": "user", "content": user_prompt(self.ds, result, platform, screen_name, package, examples)},
+            {"role": "system", "content": system_prompt(platform, catalog)},
+            {"role": "user", "content": user_prompt(self.ds, result, platform, screen_name, package, examples,
+                                                    skills.blocks() if skills else None)},
         ]
+        empty = SkillPlan(platform)
         tracer.log("start", platform=platform, screen=screen_name, model=self.cfg.llm_model,
-                   spec=result.spec, examples=len(examples))
+                   spec=result.spec, examples=len(examples), **(skills or empty).trace())
 
         out = AgentResult(ok=False, code=None, rounds=0, validation=None,
                           trace_path=str(tracer.path) if tracer.path else None)
@@ -117,7 +126,8 @@ class CodegenAgent:
 
             out.code = code
             with self.progress.step(f"{tag} · {check_label}") as st:
-                v = validate(code, platform, plat)
+                patterns = {**(skills.patterns() if skills else {}), **(loader.patterns() if loader else {})}
+                v = validate(code, platform, plat, patterns)
                 if v.ok:
                     st.done("valid" + (" (compile skipped: no sandbox configured)" if v.compile_skipped else ""))
                 else:
@@ -131,6 +141,10 @@ class CodegenAgent:
                 return out
             messages.append({"role": "user", "content": fix_prompt(v.feedback(), platform)})
             self._compact(messages)
+            if loader and loader.loaded:
+                # Compaction dropped the load_skill results; the conventions still apply.
+                messages[-1]["content"] = ("Team conventions you loaded with load_skill (still apply):\n\n"
+                                           + loader.loaded_text() + "\n\n" + messages[-1]["content"])
         return out
 
     def _complete(self, messages: list[dict], tools: Tools, tracer: Tracer) -> tuple[str, int]:

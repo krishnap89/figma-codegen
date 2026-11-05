@@ -12,16 +12,20 @@ import subprocess
 from pathlib import Path
 
 from .design_system import DesignSystem
+from .skills import SkillLoader
 
 CODE_EXTS = {".kt", ".kts", ".swift"}
 MAX_OUT = 4000
 
 
 class Tools:
-    def __init__(self, ds: DesignSystem, platform: str, repo_root: str | None = None):
+    def __init__(self, ds: DesignSystem, platform: str, repo_root: str | None = None,
+                 skill_loader: SkillLoader | None = None):
         self.ds = ds
         self.platform = platform
         self.repo_root = Path(repo_root).resolve() if repo_root else None
+        # Only set when agent.skill_tool is on; `load_skill` is offered only then.
+        self.skill_loader = skill_loader
 
     # ---------- tool implementations ----------
     def get_component_docs(self, name: str) -> str:
@@ -71,6 +75,10 @@ class Tools:
         chunk = lines[start - 1 : start - 1 + int(max_lines)]
         return "\n".join(f"{start + i}: {l}" for i, l in enumerate(chunk))[:MAX_OUT * 2]
 
+    def load_skill(self, name: str) -> str:
+        assert self.skill_loader
+        return self.skill_loader.load(name)
+
     # ---------- schemas / dispatch ----------
     def schemas(self) -> list[dict]:
         s = [
@@ -86,6 +94,11 @@ class Tools:
                 _fn("read_file", "Read a source file from the app repository (path relative to repo root).",
                     {"path": {"type": "string"}, "start_line": {"type": "integer"}, "max_lines": {"type": "integer"}}, ["path"]),
             ]
+        if self.skill_loader and self.skill_loader.catalog():
+            s.append(_fn("load_skill", "Load a team convention (skill) listed in the system prompt: "
+                                       "its rules and examples.",
+                         {"name": {"type": "string", "enum": [k.name for k in self.skill_loader.plan.available]}},
+                         ["name"]))
         return s
 
     def dispatch(self, name: str, arguments: str | dict) -> str:

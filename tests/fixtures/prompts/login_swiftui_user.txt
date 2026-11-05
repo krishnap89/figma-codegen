@@ -1,0 +1,228 @@
+## Screen spec (from Figma)
+```json
+{
+ "screen": "LoginScreen",
+ "figmaNode": "12:300",
+ "root": {
+  "type": "Column",
+  "name": "Login Screen",
+  "background": "color.background.primary",
+  "padding": {
+   "horizontal": "spacing.l",
+   "vertical": "spacing.xl"
+  },
+  "gap": "spacing.m",
+  "fill": "maxSize",
+  "children": [
+   {
+    "type": "Text",
+    "name": "Title",
+    "text": "Welcome back",
+    "style": "typography.heading/l",
+    "color": "color.text.primary"
+   },
+   {
+    "type": "Text",
+    "name": "Subtitle",
+    "text": "Log in to continue",
+    "style": "typography.body/m",
+    "color": "color.text.secondary"
+   },
+   {
+    "type": "Spacer",
+    "size": "spacing.s"
+   },
+   {
+    "component": "TextField",
+    "name": "EmailField",
+    "props": {
+     "label": "Email",
+     "placeholder": "name@company.com",
+     "isSecure": false
+    },
+    "binding": "email",
+    "fill": "maxWidth"
+   },
+   {
+    "component": "TextField",
+    "name": "PasswordField",
+    "props": {
+     "label": "Password",
+     "isSecure": true
+    },
+    "binding": "password",
+    "fill": "maxWidth"
+   },
+   {
+    "component": "Link",
+    "name": "ForgotPasswordLink",
+    "props": {
+     "text": "Forgot password?"
+    },
+    "event": "onForgotPassword",
+    "fill": "maxWidth"
+   },
+   {
+    "type": "Spacer",
+    "weight": 1
+   },
+   {
+    "component": "Button",
+    "name": "LoginButton",
+    "props": {
+     "style": "Primary",
+     "size": "L",
+     "enabled": true,
+     "text": "Log in"
+    },
+    "event": "onLogin",
+    "fill": "maxWidth"
+   },
+   {
+    "type": "Graphic",
+    "name": "Decoration",
+    "sizePx": "0x0"
+   },
+   {
+    "type": "Unmapped",
+    "name": "PromoBanner",
+    "figmaComponent": "Promo Banner"
+   }
+  ]
+ },
+ "warnings": [
+  "[Decoration 12:360] hand-drawn graphic; use a UIKit Icon/Image/component, or export it as an asset",
+  "[PromoBanner 12:370] instance of 'Promo Banner' is not in the UIKit manifest"
+ ]
+}
+```
+
+## UIKit components used
+```json
+[
+ {
+  "figma": "Button",
+  "description": "Primary action button. Use one Primary per screen.",
+  "props": {
+   "style": {
+    "figmaProp": "Style",
+    "values": [
+     "Primary",
+     "Secondary",
+     "Text"
+    ]
+   },
+   "size": {
+    "figmaProp": "Size",
+    "values": [
+     "S",
+     "M",
+     "L"
+    ]
+   },
+   "enabled": {
+    "figmaProp": "State",
+    "map": {
+     "Default": true,
+     "Disabled": false
+    }
+   },
+   "text": {
+    "figmaText": "Label"
+   }
+  },
+  "swiftui": {
+   "import": "CompanyUIKit",
+   "signature": "UIKitButton(_ title: String, style: UIKitButtonStyle = .primary, size: UIKitButtonSize = .m, isEnabled: Bool = true, action: @escaping () -> Void)",
+   "example": "UIKitButton(\"Continue\", style: .primary, size: .l, action: onContinue)"
+  }
+ },
+ {
+  "figma": "Link",
+  "description": "Inline text link.",
+  "props": {
+   "text": {
+    "figmaText": "Label"
+   }
+  },
+  "swiftui": {
+   "import": "CompanyUIKit",
+   "signature": "UIKitLink(_ title: String, action: @escaping () -> Void)",
+   "example": "UIKitLink(\"Forgot password?\", action: onForgotPassword)"
+  }
+ },
+ {
+  "figma": "TextField",
+  "description": "Single-line input with label, optional placeholder and error text.",
+  "props": {
+   "label": {
+    "figmaText": "Label"
+   },
+   "placeholder": {
+    "figmaText": "Placeholder"
+   },
+   "isSecure": {
+    "figmaProp": "Type",
+    "map": {
+     "Text": false,
+     "Password": true
+    }
+   },
+   "error": {
+    "figmaText": "Error"
+   }
+  },
+  "swiftui": {
+   "import": "CompanyUIKit",
+   "signature": "UIKitTextField(_ label: String, text: Binding<String>, placeholder: String? = nil, isSecure: Bool = false, error: String? = nil)",
+   "example": "UIKitTextField(\"Email\", text: $state.email)"
+  }
+ }
+]
+```
+
+## Layout primitives
+- Column: `VStack(alignment: .leading|.center|.trailing, spacing: <gap token>) { ... }`
+- Row: `HStack(alignment: .top|.center|.bottom, spacing: <gap token>) { ... }`
+- Box: `ZStack { ... }`
+- Spacer: `Spacer().frame(height: <size token>) inside VStack, Spacer().frame(width: <size token>) inside HStack, Spacer() for weight`
+- Text: `UIKitText("...", style: <typography token>, color: <color token>)`
+- padding: `.padding(.horizontal, <token>).padding(.vertical, <token>)`
+- background: `.background(<color token>)`
+- fill: `maxSize -> .frame(maxWidth: .infinity, maxHeight: .infinity), maxWidth -> .frame(maxWidth: .infinity)`
+- imports: `SwiftUI, CompanyUIKit`
+
+## Token table (spec token -> code)
+```
+color.background.primary -> Theme.colors.backgroundPrimary
+color.text.primary -> Theme.colors.textPrimary
+color.text.secondary -> Theme.colors.textSecondary
+spacing.l -> Theme.spacing.l
+spacing.m -> Theme.spacing.m
+spacing.s -> Theme.spacing.s
+spacing.xl -> Theme.spacing.xl
+typography.body/m -> Theme.typography.bodyM
+typography.heading/l -> Theme.typography.headingL
+```
+
+## Designer warnings (handle with TODO comments, don't guess)
+- [Decoration 12:360] hand-drawn graphic; use a UIKit Icon/Image/component, or export it as an asset
+- [PromoBanner 12:370] instance of 'Promo Banner' is not in the UIKit manifest
+
+## Reference example 1: spec
+```json
+{"screen": "Ex"}
+```
+## Reference example 1: code written by our team
+```swift
+fun Ex() {}
+
+```
+
+## Task
+Generate the SwiftUI file for screen `LoginScreen`.
+Required shape:
+- `struct LoginScreenState` with exactly these properties: `var email: String = ""`, `var password: String = ""`
+- `struct LoginScreen: View` with `@Binding var state: LoginScreenState` and one `let <event>: () -> Void` per event: onForgotPassword, onLogin
+- Bind inputs with `$state.<binding>`.
+- A `#Preview` at the end of the file.
