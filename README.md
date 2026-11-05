@@ -9,6 +9,9 @@ figma-codegen generate "https://www.figma.com/design/AbC123/App?node-id=12-300" 
   --platform compose --out feature/login/LoginScreen.kt --package com.company.feature.login
 ```
 
+New here? [QUICKSTART.md](QUICKSTART.md) gets you from install to a generated screen on a sample frame in
+about 15 minutes.
+
 ## How it works
 
 ```
