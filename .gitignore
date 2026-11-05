@@ -26,6 +26,9 @@ codegen.yaml
 .codegen/
 out/
 
+# Drafts from `figma-codegen import-compose` (review, then copy into manifest/)
+manifest/imported/
+
 # Editors / OS
 .vscode/
 .idea/
