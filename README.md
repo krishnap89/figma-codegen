@@ -73,7 +73,7 @@ Every setting can be supplied without touching the project's `codegen.yaml`. Pre
 | `CODEGEN_USE_TOOLS` | `agent.use_tools` (`true`/`false`) |
 | `CODEGEN_MAX_EXAMPLES` | `agent.max_examples` |
 | `FIGMA_TOKEN` / `CODEGEN_FIGMA_TOKEN` | `figma.token` |
-| `CODEGEN_MANIFEST`, `CODEGEN_TOKENS`, `CODEGEN_EXAMPLES_DIR`, `CODEGEN_TRACE_DIR`, `CODEGEN_FIGMA_JSON_DIR`, `CODEGEN_REPO_ROOT` | `paths.*` |
+| `CODEGEN_MANIFEST`, `CODEGEN_TOKENS`, `CODEGEN_EXAMPLES_DIR`, `CODEGEN_TRACE_DIR`, `CODEGEN_FIGMA_JSON_DIR`, `CODEGEN_COMPARE_DIR`, `CODEGEN_REPO_ROOT` | `paths.*` |
 
 `--set` reaches any key, including per-platform ones; values are parsed as YAML so numbers,
 booleans and lists work:
@@ -138,6 +138,7 @@ figma-codegen generate <frame-url> --platform compose --out LoginScreen.kt --pac
 figma-codegen generate <frame-url> --platform swiftui --out LoginScreen.swift --repo ../ios-app
 figma-codegen lint LoginScreen.kt --platform compose
 figma-codegen components <library-file-url>          # list library components + keys (manifest work)
+figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export vs. rendered code
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--model`,
@@ -165,6 +166,114 @@ one file with `--save-figma-json PATH`.
 
 Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
 `3` LLM endpoint error.
+
+## Visual check (no AI)
+
+Lint and compile prove the code is valid, not that it looks like the design. The visual check puts the
+Figma image export next to a screenshot of the generated screen; a person compares them.
+
+```bash
+figma-codegen generate <frame-url> --platform compose --out LoginScreen.kt --compare --open
+figma-codegen compare <frame-url> --code LoginScreen.kt --open          # any time later
+figma-codegen compare <frame-url> --screenshot preview.png              # no sandbox: your own capture
+```
+
+It writes `.codegen/compare/<Screen>/index.html`, one offline file with both images embedded (attach it to
+the PR), plus `figma.png` and `render.png`. The page has four views: **side by side**, **onion skin**
+(code over Figma, opacity slider), **swipe**, and **difference** (identical pixels are black, so shifted
+spacing shows as bright bands). Keys `1`–`4` switch views. Both images are drawn at the frame's width
+in dp/pt, so an @2x Figma export and an xxhdpi/@3x screenshot line up. If their heights differ, the
+page and CLI say so.
+
+- **Figma image:** `/v1/images` export at `--scale` (default 2), cached as
+  `.codegen/figma/<fileKey>_<nodeId>@2x.png`; with `--figma-json` the cached image is reused, so
+  offline reruns work. `--figma-image PNG` skips the API.
+- **Screenshot:** `--screenshot PNG` uses any image you have (Android Studio preview, Xcode canvas,
+  emulator). Otherwise the sandbox renders it (below).
+- `generate --compare` checks the render setup before spending model rounds, and only runs after a
+  valid result. A failed visual check is reported but doesn't change the exit code.
+
+### Rendering in the sandbox
+
+A test can't call the generated preview (`private @Preview`, or the `#Preview` macro). So the harness
+writes one more file into the sandbox, `CodegenRenderTarget` (next to `sandbox_file`, or at
+`render_entry_file`). It builds the screen with default state and no-op callbacks:
+
+```kotlin
+@Composable
+fun CodegenRenderTarget() {
+    LoginScreen(state = LoginScreenState(), onEmailChange = {}, onPasswordChange = {}, onForgotPassword = {}, onLogin = {})
+}
+```
+
+Your screenshot test renders `CodegenRenderTarget()` and never changes. While a screen is generated,
+the file holds an empty stub, so the sandbox always compiles. `render_cmd` runs in `render_cwd`
+(default `compile_cwd`) and gets the frame size and target path as env vars, also usable as
+`{out}` `{width}` `{height}` `{name}` placeholders in the command:
+
+| env var | value |
+|---|---|
+| `CODEGEN_RENDER_OUT` | absolute path to write the PNG to (or set `render_output`, a path/glob the test writes) |
+| `CODEGEN_RENDER_WIDTH` / `_HEIGHT` | Figma frame size in dp/pt (`0` if unknown) |
+
+The same vars are also set with a `TEST_RUNNER_` prefix, which `xcodebuild test` passes into the test process.
+
+**Compose: [Roborazzi](https://github.com/takahirom/roborazzi) on Robolectric (JVM, no emulator).** Add
+the `io.github.takahirom.roborazzi` plugin and `roborazzi-compose`, `robolectric`, `ui-test-junit4`
+test dependencies to the sandbox app, with `unitTests.isIncludeAndroidResources = true`. Then:
+
+```kotlin
+// app/src/test/java/sandbox/RenderTest.kt
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class RenderTest {
+    @Test fun render() {
+        fun env(k: String) = System.getenv(k)?.toFloatOrNull()?.toInt()?.takeIf { it > 0 }
+        RuntimeEnvironment.setQualifiers("w${env("CODEGEN_RENDER_WIDTH") ?: 360}dp-h${env("CODEGEN_RENDER_HEIGHT") ?: 800}dp-xxhdpi")
+        captureRoboImage(System.getenv("CODEGEN_RENDER_OUT") ?: "build/codegen-render.png") {
+            AppTheme { CodegenRenderTarget() }
+        }
+    }
+}
+```
+
+```yaml
+render_cmd: ["./gradlew", ":app:testDebugUnitTest", "--tests", "sandbox.RenderTest", "--rerun", "-q", "--offline"]
+```
+
+`--rerun` is needed because Gradle doesn't count env vars as test inputs and would skip an "up-to-date"
+test. Paparazzi works too: point `render_output` at its snapshot folder (a glob such as
+`app/src/test/snapshots/images/*.png`, newest file wins).
+
+**SwiftUI: an XCTest in a test target hosted by the sandbox app** (`UIHostingController` renders
+text fields and scroll views that `ImageRenderer` can't):
+
+```swift
+@MainActor final class RenderTests: XCTestCase {
+    func testRender() throws {
+        let env = ProcessInfo.processInfo.environment
+        func dim(_ k: String, _ d: Double) -> Double { Double(env[k] ?? "").flatMap { $0 > 0 ? $0 : nil } ?? d }
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: dim("CODEGEN_RENDER_WIDTH", 390),
+                                            height: dim("CODEGEN_RENDER_HEIGHT", 844)))
+        window.rootViewController = UIHostingController(rootView: CodegenRenderTarget())  // wrap in your theme if needed
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        try image.pngData()!.write(to: URL(fileURLWithPath: env["CODEGEN_RENDER_OUT"] ?? NSTemporaryDirectory() + "render.png"))
+    }
+}
+```
+
+```yaml
+render_cmd: ["xcodebuild", "test", "-scheme", "Sandbox", "-destination", "platform=iOS Simulator,name=iPhone 16",
+             "-only-testing:SandboxTests/RenderTests/testRender", "-quiet"]
+```
+
+Add `CodegenRenderTarget.swift` to the Xcode target once (any content; the harness overwrites it).
+The SwiftUI entry passes the event closures in the order the prompt lists them, which is the order the
+model is told to declare them. If the model reorders them, the render fails to compile with a clear error.
 
 ## What the simplifier does with real files
 
