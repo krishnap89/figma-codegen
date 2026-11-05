@@ -50,8 +50,8 @@ def test_semantic_colors_win_value_matching_over_palette(imported):
 
 def test_dimensions_are_split_by_name(imported):
     _, tokens, _, ds = imported
-    assert set(tokens["spacing"]) == {"spacingXs", "spacingS", "spacingM", "spacingL"}
-    assert set(tokens["radius"]) == {"cornerRadiusS", "cornerRadiusM"}
+    assert set(tokens["spacing"]) == {"spacingMedium", "spacingXs", "spacingS", "spacingM", "spacingL"}
+    assert set(tokens["radius"]) == {"radiusLarge", "cornerRadiusS", "cornerRadiusM"}
     assert "iconSize" in tokens["size"] and "borderThin" in tokens["border"]
     assert ds.dimension_token(16, "spacing") == "spacing.spacingM"
     assert ds.token_code("spacing.spacingM", "compose") == "Dimens.spacingM"
@@ -92,11 +92,33 @@ def test_components_from_public_composables(imported):
     assert ds.match_component([], ["Text Field"]) is field
 
 
+def test_extension_property_accessor_and_constructor_properties(imported):
+    _, tokens, _, ds = imported
+    assert tokens["spacing"]["spacingMedium"]["$value"] == "12px"
+    assert ds.token_code("spacing.spacingMedium", "compose") == "MaterialTheme.dimens.spacingMedium"
+    assert ds.token_code("radius.radiusLarge", "compose") == "MaterialTheme.dimens.radiusLarge"
+
+
+def test_component_local_values_are_not_tokens(imported):
+    _, tokens, rep, _ = imported
+    colors = {t["$value"] for t in tokens["color"].values()}
+    assert "#ABCDEF" not in colors and "#123456" not in colors     # BadgeDefaults / component file
+    assert "textColor" not in tokens["color"]                       # BadgeUiState constructor property
+    assert not any("BadgeUiState" in what for what, _ in rep.skipped_themes)
+
+
+def test_usages_only_count_files_that_import_the_composable(imported):
+    _, _, rep, _ = imported
+    row = next(c for c in rep.components if c["name"] == "Box")
+    assert row["usages"] == 0 and "shadows Compose" in row["note"]
+
+
 def test_text_primitive_and_imports(imported):
     manifest, *_ = imported
     prim = manifest["primitives"]["compose"]
     assert prim["Text"].startswith("LegacyText(")
     assert "com.legacy.uikit.theme.AppTheme" in prim["imports"]
+    assert "com.legacy.uikit.theme.dimens" in prim["imports"]
     assert "androidx.compose.material.MaterialTheme" in prim["imports"]
 
 

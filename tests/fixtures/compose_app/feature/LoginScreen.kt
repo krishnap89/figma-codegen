@@ -1,8 +1,14 @@
 package com.legacy.app.feature
 
+import androidx.compose.foundation.layout.Box
+import com.legacy.uikit.button.LegacyButton
+import com.legacy.uikit.button.LegacyButtonStyle
+import com.legacy.uikit.input.*
+
 @Composable
 fun LoginScreen(state: LoginState, onLogin: () -> Unit, onEmailChange: (String) -> Unit) {
     Column {
+        Box(Modifier) {}
         LegacyTextField(
             value = state.email,
             onValueChange = onEmailChange,

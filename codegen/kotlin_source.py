@@ -203,19 +203,28 @@ class KtFile:
         parts = [self.masked[line_start:offset]]
         pos = line_start - 1
         balance = 0
-        while pos > 0:
+        pending: list[str] = []   # lines inside a multi-line annotation argument list, e.g. @Preview(\n ... \n)
+        for _ in range(60):       # annotations never span more; also keeps this O(1) per declaration
+            if pos <= 0:
+                break
             ls = self.masked.rfind("\n", 0, pos) + 1
             line = self.masked[ls:pos].strip()
+            pos = ls - 1
             balance += line.count(")") - line.count("(")
-            if not line:
-                if balance > 0:
-                    pos = ls - 1
-                    continue
-                break
-            if balance > 0 or line.startswith("@") or re.fullmatch(r"(\w+\s*)+", line) and \
-                    all(w in MODIFIERS for w in line.split()):
+            if balance > 0:
+                pending.append(line)
+                continue
+            if pending:            # the group is an annotation only if it opens with `@Name(`
+                if not line.startswith("@"):
+                    break
+                parts.extend(pending)
+                pending = []
                 parts.append(line)
-                pos = ls - 1
+                continue
+            if not line:
+                break
+            if line.startswith("@") or all(w in MODIFIERS for w in line.split()):
+                parts.append(line)
                 continue
             break
         return " ".join(reversed(parts))

@@ -40,6 +40,8 @@ RADIUS = re.compile(r"radius|radii|corner|round", re.I)
 BORDER = re.compile(r"border|stroke|outline|divider", re.I)
 SPACING = re.compile(r"spac|padding|gap|margin|inset|gutter|space", re.I)
 SIZE = re.compile(r"size|height|width|icon|elevation|avatar", re.I)
+COMPOSE_BUILTINS = {"Box", "Row", "Column", "Text", "Spacer", "Surface", "Card", "Button", "Icon", "Image",
+                    "Scaffold", "Divider", "LazyColumn", "LazyRow", "TextField", "Checkbox", "Switch"}
 THEMEISH = re.compile(r"colou?r|typograph|spacing|dimen|shape|radius|palette|theme|font", re.I)
 TEXT_PARAMS = {"text", "label", "title", "subtitle", "placeholder", "hint", "error", "errortext",
                "helpertext", "supportingtext", "description", "caption", "message", "headline", "body"}
@@ -100,7 +102,7 @@ class Module:
         self.symbols: dict[str, Sym] = {}
         self.classes: dict[str, ClassInfo] = {}
         self.enums: dict[str, list[str]] = {}
-        self.objects: dict[str, tuple] = {}       # qualified object path -> (file, )
+        self._ctor_ranges: dict = {}               # path -> [(open, close)] of primary constructors
         for f in self.files:
             self._index(f)
 
@@ -146,6 +148,7 @@ class Module:
                 params.append((pm.group(3), pm.group(4).strip(), (pm.group(5) or "").strip() or None,
                                bool(pm.group(2)) and not hidden))
             self.classes[cm.group(1)] = ClassInfo(cm.group(1), f, params, [])
+            self._ctor_ranges.setdefault(f.path, []).append((open_, close))
         # enums, sealed hierarchies
         for em in re.finditer(r"\benum\s+class\s+([A-Za-z_]\w*)[^{]*\{", m):
             close = match_bracket(m, em.end() - 1)
@@ -156,6 +159,8 @@ class Module:
             self.enums.setdefault(sm.group(2), []).append(sm.group(1))
         # vals
         for vm in re.finditer(r"(?<![\w.])va[lr]\s+([A-Za-z_]\w*)\s*(?::\s*([^=\n{]+?))?\s*(=|\bby\b)", m):
+            if any(o < vm.start() < c for o, c in self._ctor_ranges.get(f.path, [])):
+                continue  # `class X(val a: Dp = 4.dp)`: a property of X, handled with the class
             name, typ, start = vm.group(1), (vm.group(2) or "").strip(), vm.end()
             end = expr_end(m, start)
             text = f.code[start:end].strip()
@@ -347,7 +352,9 @@ class Evaluator:
     def _text_style(self, pos, named, owner, env, depth) -> dict:
         out = {}
         if "fontFamily" in named:
-            out["fontFamily"] = self._font_family(named["fontFamily"], owner)
+            family = self._font_family(named["fontFamily"], owner)
+            if family:
+                out["fontFamily"] = family
         if "fontWeight" in named:
             w = self._font_weight(named["fontWeight"], owner, depth)
             if w:
@@ -381,7 +388,7 @@ class Evaluator:
         sym = self.mod.lookup(t, owner) if re.fullmatch(r"[\w.]+", t) and depth < 12 else None
         return self._font_weight(sym.text, sym.owner, depth + 1) if sym else None
 
-    def _font_family(self, t: str, owner) -> str:
+    def _font_family(self, t: str, owner) -> Optional[str]:
         t = t.strip()
         m = re.fullmatch(r"FontFamily\.(\w+)", t)
         if m:
@@ -391,7 +398,7 @@ class Evaluator:
         m = re.search(r"R\.font\.([a-z0-9]+)", src)
         if m:
             return m.group(1).capitalize()
-        return t.split(".")[-1]
+        return t.split(".")[-1] if sym else None   # unresolved: a local/parameter (e.g. picked per locale)
 
 
 # ---------------------------------------------------------------- tokens
@@ -429,6 +436,17 @@ def _material_package(mod: Module) -> str:
 
 def _class_accessor(mod: Module, cls: str) -> Optional[tuple[str, set]]:
     """'AppColors' -> ('AppTheme.colors', {'com.x.AppTheme'})."""
+    for f in mod.files:
+        for m in re.finditer(rf"(?<![\w.])val\s+([A-Z]\w*)\.([A-Za-z_]\w*)\s*:\s*{re.escape(cls)}\b", f.masked):
+            if is_hidden(f.prefix_before(m.start())) or f.scope(m.start()):
+                continue
+            recv, prop = m.group(1), m.group(2)
+            imports = {f"{f.package}.{prop}" if f.package else prop}
+            if recv == "MaterialTheme":
+                imports.add(f"androidx.compose.{_material_package(mod)}.MaterialTheme")
+            elif mod.object_package(recv):
+                imports.add(f"{mod.object_package(recv)}.{recv}")
+            return f"{recv}.{prop}", imports
     best = None
     for f in mod.files:
         for m in re.finditer(rf"(?<![\w.])va[lr]\s+([A-Za-z_]\w*)\s*:\s*{re.escape(cls)}\b(?!\s*\()", f.masked):
@@ -450,6 +468,17 @@ def _class_accessor(mod: Module, cls: str) -> Optional[tuple[str, set]]:
             if m.group(2) == cls or re.search(rf"\b{re.escape(cls)}\s*\(", body):
                 return f"{m.group(1)}.current", {f"{f.package}.{m.group(1)}" if f.package else m.group(1)}
     return None
+
+
+_THEME_DIR = re.compile(r"^(theme|themes|tokens?|designsystem|design|styles?|foundation)$", re.I)
+
+
+def _is_theme_file(mod: Module, f: KtFile) -> bool:
+    try:
+        dirs = f.path.relative_to(mod.root).parts[:-1]
+    except ValueError:
+        dirs = ()
+    return any(_THEME_DIR.match(p) for p in list(dirs) + f.package.split("."))
 
 
 def collect_tokens(mod: Module, ev: Evaluator, rep: Report) -> list[Token]:
@@ -480,9 +509,6 @@ def collect_tokens(mod: Module, ev: Evaluator, rep: Report) -> list[Token]:
             return (bool(DARK.search(inst)), not LIGHT.search(inst), -len(args))
         sites.sort(key=rank)
         f, off, inst, args_text = sites[0]
-        for other in sites[1:]:
-            rep.skipped_themes.append((f"{cls}: {other[2] or '(anonymous)'} at {mod.where(other[0], other[1])}",
-                                       f"used `{inst or '(anonymous)'}` instead"))
         if cls in mod.classes:
             info = mod.classes[cls]
             acc = _class_accessor(mod, cls)
@@ -495,6 +521,10 @@ def collect_tokens(mod: Module, ev: Evaluator, rep: Report) -> list[Token]:
             pkg = pkg or mat_pkg
             acc = (accessor, {f"androidx.compose.{pkg}.MaterialTheme"})
             info = None
+        for other in sites[1:]:
+            if other[2] and other[2] != inst and collapse(other[3]) != collapse(args_text):
+                rep.skipped_themes.append((f"{cls}: `{other[2]}` at {mod.where(other[0], other[1])}",
+                                           f"used `{inst or '(anonymous)'}` instead"))
         pos, named = _args(args_text)
         where = mod.where(f, off)
         owner = tuple(mod.owner_path(f, off) or ())
@@ -521,10 +551,17 @@ def collect_tokens(mod: Module, ev: Evaluator, rep: Report) -> list[Token]:
             cat = _category(val, pname, cls)
             tokens.append(Token(cat, pname, val, f"{acc[0]}.{pname}", set(acc[1]), where, 0))
 
-    # 2. object members and top-level vals
+    # 2. object members and top-level vals. Component files hold component-local values
+    #    (ButtonDefaults.Height, a card's text color), so prefer the theme package(s) when there are any.
+    theme_files = {f.path for f in mod.files if _is_theme_file(mod, f)}
+    if theme_files:
+        rep.notes.append(f"Palette / object tokens are read only from {len(theme_files)} theme file(s) "
+                         f"(package or folder named theme/tokens/design/style).")
     for q, sym in mod.symbols.items():
         name = q.split(".")[-1]
         if sym.hidden or name in instance_names or name.startswith("Local"):
+            continue
+        if (theme_files and sym.file.path not in theme_files) or any(o.endswith("Defaults") for o in sym.owner):
             continue
         val = ev.ev(sym.text, sym.owner)
         if val is None:
@@ -698,8 +735,16 @@ def _common_prefix(names: list[str]) -> str:
     return w if n >= 2 and n >= 0.4 * len(names) else ""
 
 
-def _usages(app_files: list[KtFile], names: set[str]) -> dict[str, list]:
-    """name -> [(KtFile, call_text)] for call sites outside the module."""
+def _sees(f: KtFile, name: str, pkg: str) -> bool:
+    """Does `f` resolve `name` to the UIKit's composable (same package or imported)?"""
+    if f.package == pkg:
+        return True
+    return bool(re.search(rf"^\s*import\s+{re.escape(pkg)}\.(?:{re.escape(name)}|\*)\s*$", f.masked, re.M))
+
+
+def _usages(app_files: list[KtFile], packages: dict[str, str]) -> dict[str, list]:
+    """name -> [(KtFile, offset, call_text)] for call sites outside the module that import the composable."""
+    names = set(packages)
     if not names:
         return {}
     rx = re.compile(r"(?<![\w.])(" + "|".join(map(re.escape, sorted(names))) + r")\s*\(")
@@ -716,7 +761,8 @@ def _usages(app_files: list[KtFile], names: set[str]) -> dict[str, list]:
                 lam_close = match_bracket(f.masked, lam_open)
                 lam = f.code[lam_open:lam_close + 1]
                 text += " " + (lam if len(collapse(lam)) <= 80 else "{ ... }")
-            out.setdefault(m.group(1), []).append((f, m.start(), text))
+            if _sees(f, m.group(1), packages[m.group(1)]):
+                out.setdefault(m.group(1), []).append((f, m.start(), text))
     return out
 
 
@@ -737,7 +783,7 @@ def collect_components(mod: Module, app_files: list[KtFile], figma: list[dict], 
             found.setdefault(name, []).append(dict(file=f, offset=m.start(), params=params, sig=sig, kdoc=kdoc,
                                                    deprecated="@Deprecated" in prefix))
 
-    usages = _usages(app_files, set(found))
+    usages = _usages(app_files, {n: o[0]["file"].package for n, o in found.items()})
     prefix_word = _common_prefix(list(found))
     figma_names = {}
     for row in figma:
@@ -783,6 +829,8 @@ def collect_components(mod: Module, app_files: list[KtFile], figma: list[dict], 
         entry["compose"] = {"import": f"{main['file'].package}.{name}" if main["file"].package else name,
                             "signature": sig, "example": example}
         comps.append(entry)
+        if name in COMPOSE_BUILTINS:
+            note = (note + "; " if note else "") + f"shadows Compose `{name}`; probably not a design component"
         rep.components.append(dict(name=name, figma=figma_name, figma_src=figma_src, kind=kind or "-",
                                    usages=len(calls), example=ex_src, props=len(entry["props"]),
                                    description=bool(desc), note=note, where=mod.where(main["file"], main["offset"])))
