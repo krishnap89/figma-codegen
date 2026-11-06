@@ -159,6 +159,8 @@ def cmd_generate(args, cfg) -> int:
 
     if args.no_tools:
         cfg.use_tools = False
+    if args.no_stream:
+        cfg.stream = False
     if args.repo:
         cfg.repo_root = str(Path(args.repo).resolve())
     progress = Progress()
@@ -205,7 +207,14 @@ def cmd_generate(args, cfg) -> int:
         return 2
     except Exception as e:
         if type(e).__module__.startswith("openai"):
-            print(f"{st.err('error:')} LLM request failed ({type(e).__name__}: {e}). Check llm.base_url / llm.model.")
+            hint = ""
+            if getattr(e, "status_code", None) == 504 and not cfg.stream:
+                hint = " A gateway timed out waiting for the reply; turn streaming back on (llm.stream: true)."
+            print(f"{st.err('error:')} LLM request failed ({type(e).__name__}: {e}). "
+                  f"Check llm.base_url / llm.model.{hint}")
+            return 3
+        if isinstance(e, httpx.HTTPError):  # the connection dropped while a streamed reply was being read
+            print(f"{st.err('error:')} LLM stream interrupted ({type(e).__name__}: {e}).")
             return 3
         raise
 
@@ -478,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--repo", help="app repo root; enables search_code/read_file tools")
     g.add_argument("--model", help="override llm.model")
     g.add_argument("--no-tools", action="store_true", help="disable tool calling (if your server lacks it)")
+    g.add_argument("--no-stream", action="store_true",
+                   help="wait for the whole reply instead of streaming it (sets llm.stream=false)")
     g.add_argument("--strict", action="store_true", help="abort if the Figma frame has warnings")
     g.add_argument("--skill", action="append", default=[], metavar="NAME",
                    help="always include this skill (repeatable; see `figma-codegen skills`)")

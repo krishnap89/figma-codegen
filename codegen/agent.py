@@ -11,7 +11,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Iterable
 
 from .config import Config
 from .design_system import DesignSystem
@@ -72,6 +73,49 @@ def _msg_to_dict(msg: Any) -> dict:
             for c in msg.tool_calls
         ]
     return d
+
+
+def read_stream(chunks: Iterable[Any], on_progress=None) -> SimpleNamespace:
+    """Assemble streamed chat-completion chunks into a message like a non-streamed `choices[0].message`.
+
+    Content arrives as text pieces; each tool call arrives as pieces keyed by `index` (id and name
+    usually in the first one, the JSON arguments spread over the rest).
+    `on_progress(chars)` is called with the number of characters received so far.
+    """
+    content: list[str] = []
+    calls: dict[int, dict] = {}
+    received = 0
+    for chunk in chunks:
+        choices = getattr(chunk, "choices", None)
+        if not choices:          # e.g. a final usage-only chunk
+            continue
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            continue
+        text = getattr(delta, "content", None)
+        if text:
+            content.append(text)
+            received += len(text)
+        for tc in getattr(delta, "tool_calls", None) or []:
+            index = tc.index if getattr(tc, "index", None) is not None else 0
+            slot = calls.setdefault(index, {"id": None, "name": "", "arguments": ""})
+            if getattr(tc, "id", None):
+                slot["id"] = tc.id
+            fn = getattr(tc, "function", None)
+            if fn is not None:
+                if fn.name and fn.name != slot["name"]:   # some servers repeat the full name in every piece
+                    slot["name"] += fn.name
+                if fn.arguments:
+                    slot["arguments"] += fn.arguments
+                    received += len(fn.arguments)
+        if on_progress:
+            on_progress(received)
+    tool_calls = [
+        SimpleNamespace(id=s["id"] or f"call_{i}", type="function",
+                        function=SimpleNamespace(name=s["name"], arguments=s["arguments"]))
+        for i, s in sorted(calls.items())
+    ]
+    return SimpleNamespace(content="".join(content) or None, tool_calls=tool_calls or None)
 
 
 class CodegenAgent:
@@ -152,15 +196,15 @@ class CodegenAgent:
         calls = 0
         schemas = tools.schemas() if self.cfg.use_tools else None
         for i in range(self.cfg.max_tool_calls_per_round + 1):
-            kwargs: dict = dict(model=self.cfg.llm_model, messages=messages,
-                                temperature=self.cfg.temperature, max_tokens=self.cfg.max_tokens)
+            kwargs: dict = dict(model=self.cfg.llm_model, messages=messages, temperature=self.cfg.temperature,
+                                max_tokens=self.cfg.max_tokens, stream=self.cfg.stream)
             offer_tools = schemas and i < self.cfg.max_tool_calls_per_round
             if offer_tools:
                 kwargs["tools"] = schemas
             self.progress.update(f"waiting for {self.cfg.llm_model}"
                                  + (f" (after {calls} tool call{'s' if calls != 1 else ''})" if calls else ""))
             resp = self.client.chat.completions.create(**kwargs)
-            msg = resp.choices[0].message
+            msg = read_stream(resp, self._stream_progress()) if self.cfg.stream else resp.choices[0].message
             messages.append(_msg_to_dict(msg))
             tracer.log("response", content=msg.content,
                        tool_calls=[c.function.name for c in (msg.tool_calls or [])])
@@ -179,6 +223,17 @@ class CodegenAgent:
                 # Model called tools although none were offered; force a final answer.
                 messages.append({"role": "user", "content": "Stop calling tools and give the final code block now."})
         return "", calls
+
+    def _stream_progress(self):
+        """Progress callback for read_stream, redrawing at most 10 times a second."""
+        last = [0.0]
+
+        def report(chars: int) -> None:
+            now = time.monotonic()
+            if chars and now - last[0] >= 0.1:
+                last[0] = now
+                self.progress.update(f"receiving from {self.cfg.llm_model} · {chars:,} chars")
+        return report
 
     @staticmethod
     def _compact(messages: list[dict]) -> None:

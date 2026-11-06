@@ -45,6 +45,9 @@ class Config:
     llm_api_key: str = "not-needed"
     temperature: float = 0.1
     max_tokens: int = 4096
+    # Stream replies so tokens flow while the model works; a gateway/proxy in front of the server
+    # (nginx, a load balancer) may return 504 for a non-streamed request that takes minutes.
+    stream: bool = True
     max_rounds: int = 4
     max_tool_calls_per_round: int = 8
     use_tools: bool = True
@@ -78,6 +81,7 @@ ENV_VARS: dict[str, str] = {
     "CODEGEN_LLM_API_KEY": "llm.api_key",
     "CODEGEN_LLM_TEMPERATURE": "llm.temperature",
     "CODEGEN_LLM_MAX_TOKENS": "llm.max_tokens",
+    "CODEGEN_LLM_STREAM": "llm.stream",
     "CODEGEN_MAX_ROUNDS": "agent.max_rounds",
     "CODEGEN_MAX_TOOL_CALLS": "agent.max_tool_calls_per_round",
     "CODEGEN_USE_TOOLS": "agent.use_tools",
@@ -214,6 +218,7 @@ def _from_dict(data: dict, base: Path) -> Config:
     cfg.llm_api_key = str(llm.get("api_key", cfg.llm_api_key))
     cfg.temperature = float(llm.get("temperature", cfg.temperature))
     cfg.max_tokens = int(llm.get("max_tokens", cfg.max_tokens))
+    cfg.stream = _bool(llm.get("stream", cfg.stream))
     cfg.max_rounds = int(agent.get("max_rounds", cfg.max_rounds))
     cfg.max_tool_calls_per_round = int(agent.get("max_tool_calls_per_round", cfg.max_tool_calls_per_round))
     cfg.use_tools = _bool(agent.get("use_tools", cfg.use_tools))
@@ -265,7 +270,7 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
     return {
         "source": cfg.source or "(defaults only — no config file found)",
         "llm": {"base_url": cfg.llm_base_url, "model": cfg.llm_model, "api_key": secret(cfg.llm_api_key),
-                "temperature": cfg.temperature, "max_tokens": cfg.max_tokens},
+                "temperature": cfg.temperature, "max_tokens": cfg.max_tokens, "stream": cfg.stream},
         "agent": {"max_rounds": cfg.max_rounds, "max_tool_calls_per_round": cfg.max_tool_calls_per_round,
                   "use_tools": cfg.use_tools, "max_examples": cfg.max_examples,
                   "max_skill_chars": cfg.max_skill_chars, "skill_tool": cfg.skill_tool},

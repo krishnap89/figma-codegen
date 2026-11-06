@@ -84,7 +84,26 @@ class FakeClient:
     def _create(self, **kwargs):
         self.requests.append({**kwargs, "messages": list(kwargs["messages"])})
         content, tool_calls = self.turns.pop(0)
+        if kwargs.get("stream"):
+            return iter(stream_chunks(content, tool_calls))
         return NS(choices=[NS(message=NS(content=content, tool_calls=tool_calls))])
+
+
+def _halves(s):
+    return [s[: len(s) // 2], s[len(s) // 2:]] if s else []
+
+
+def stream_chunks(content, tool_calls):
+    """The turn as a server streams it: text in pieces; each tool call's id + name first, then its
+    arguments in pieces; a final chunk with no choices (usage)."""
+    chunks = [NS(choices=[NS(delta=NS(content=piece, tool_calls=None))]) for piece in _halves(content or "")]
+    for i, c in enumerate(tool_calls or []):
+        chunks.append(NS(choices=[NS(delta=NS(content=None, tool_calls=[
+            NS(index=i, id=c.id, function=NS(name=c.function.name, arguments=None))]))]))
+        for piece in _halves(c.function.arguments):
+            chunks.append(NS(choices=[NS(delta=NS(content=None, tool_calls=[
+                NS(index=i, id=None, function=NS(name=None, arguments=piece))]))]))
+    return chunks + [NS(choices=[])]
 
 
 def call(name, args, id="c1"):

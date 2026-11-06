@@ -53,6 +53,8 @@ export FIGMA_TOKEN=figd_...  # Figma personal access token (read-only scope is e
 Edit `codegen.yaml`: `llm.base_url` and `llm.model` for your Qwen server. For vLLM, tool calling
 needs `--enable-auto-tool-choice --tool-call-parser <parser for your Qwen version>`.
 
+Replies are streamed by default (`llm.stream`), which avoids 504s from a gateway in front of the server.
+
 ### Configuring from outside (env vars, flags, shared config)
 
 Every setting can be supplied without touching the project's `codegen.yaml`. Precedence, lowest → highest:
@@ -71,6 +73,7 @@ Every setting can be supplied without touching the project's `codegen.yaml`. Pre
 | `CODEGEN_LLM_API_KEY` | `llm.api_key` |
 | `CODEGEN_LLM_TEMPERATURE` | `llm.temperature` |
 | `CODEGEN_LLM_MAX_TOKENS` | `llm.max_tokens` |
+| `CODEGEN_LLM_STREAM` | `llm.stream` (`true`/`false`) |
 | `CODEGEN_MAX_ROUNDS` | `agent.max_rounds` |
 | `CODEGEN_MAX_TOOL_CALLS` | `agent.max_tool_calls_per_round` |
 | `CODEGEN_USE_TOOLS` | `agent.use_tools` (`true`/`false`) |
@@ -255,7 +258,7 @@ figma-codegen skills                                 # list skills and check the
 figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export vs. rendered code
 ```
 
-Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--model`,
+Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
 `--skill NAME` / `--no-skills` (see [Skills](#skills)),
 `--repo` (enables code search tools), `--figma-json` (offline: saved `/v1/files/:key/nodes` response),
 `-v/--verbose` (also on `spec`: list every Figma warning).

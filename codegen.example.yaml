@@ -6,6 +6,7 @@ llm:
   api_key: not-needed
   temperature: 0.1
   max_tokens: 4096
+  stream: true                   # avoids 504s: a gateway in front of the server may time out a long non-streamed reply
 
 agent:
   max_rounds: 4                  # generate → validate → fix rounds
