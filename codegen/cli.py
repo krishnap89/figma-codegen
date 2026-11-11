@@ -11,6 +11,7 @@
   figma-codegen status src/                          # generated screens: Figma frame, edited since?
   figma-codegen diff LoginScreen.kt                  # what changed in Figma since the code was generated
   figma-codegen update LoginScreen.kt --apply        # apply only those changes to the code
+  figma-codegen readiness <figma-url> --html r.html  # is this frame ready for code? (for designers)
 """
 from __future__ import annotations
 
@@ -113,7 +114,7 @@ def _simplify(args, cfg, progress: Progress) -> tuple[DesignSystem, SimplifyResu
         ds = _load_ds(cfg)
     frame = _load_node(args, cfg, progress)
     with progress.step("simplifying") as st:
-        result = simplify(ds, frame.node)
+        result = simplify(ds, frame.node, cfg.ignore_layers)
         n = len(result.issues)
         st.done(f"{n} warning{'s' if n != 1 else ''}" if n else "no warnings")
     args.report.warnings(result.issues)
@@ -713,6 +714,26 @@ def cmd_update(args, cfg) -> int:
     return 0
 
 
+def cmd_readiness(args, cfg) -> int:
+    from .readiness import compute, render_html, render_text
+
+    st = Style.for_stream(sys.stdout)
+    _, result, frame = _simplify(args, cfg, Progress())
+    r = compute(result, cfg.readiness_weights)
+    screen = result.spec.get("screen", "Screen")
+    args.report.set(screen=screen, **r.to_json(frame.file_key), min_score=args.min_score, html_file=args.html)
+    print(render_text(r, screen, frame.file_key, st, args.verbose))
+    if args.html:
+        Path(args.html).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.html).write_text(render_html(r, screen, frame.file_key, args.figma_url))
+        print(st.dim(f"\n  page: {args.html}"))
+    if args.min_score is not None and r.score < args.min_score:
+        print(st.err(f"\nscore {r.score} is below --min-score {args.min_score}"))
+        args.report.status = "failed"
+        return 2
+    return 0
+
+
 def cmd_lint(args, cfg) -> int:
     code = Path(args.file).read_text()
     issues = lint(code, args.platform, cfg.platform(args.platform).forbidden_patterns)
@@ -893,6 +914,13 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--no-tools", action="store_true", help="disable tool calling (if your server lacks it)")
     u.add_argument("--no-stream", action="store_true", help="wait for the whole reply instead of streaming it")
     u.set_defaults(func=cmd_update)
+
+    rd = sub.add_parser("readiness", help="score a Figma frame 0–100 for code readiness, with how to fix it in Figma")
+    add_source(rd)
+    rd.add_argument("--html", metavar="FILE", help="also write a self-contained page designers can open")
+    rd.add_argument("--min-score", type=int, metavar="N",
+                    help="exit 2 if the score is below N (for CI or handoff gates)")
+    rd.set_defaults(func=cmd_readiness)
 
     l = sub.add_parser("lint", help="design-system lint for a file")
     l.add_argument("file")

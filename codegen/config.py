@@ -38,6 +38,14 @@ class PlatformConfig:
     render_timeout: int = 600
 
 
+READINESS_WEIGHTS: dict[str, float] = {
+    "missing_component": 6, "no_auto_layout": 6, "hand_drawn_graphic": 3, "unbound_style": 2,
+    "value_without_token": 2, "default_name": 1, "unknown_variant": 3,
+}
+# Same default as simplify.DEFAULT_IGNORE_LAYERS (kept here so config doesn't import the simplifier).
+DEFAULT_IGNORE_LAYERS = ["_*", "*Statusbar*", "*Status Bar*", "*Home Indicator*", "*Keyboard*"]
+
+
 @dataclass
 class Config:
     llm_base_url: str = "http://localhost:8000/v1"
@@ -67,6 +75,9 @@ class Config:
     compare_dir: str = ".codegen/compare"
     repo_root: str | None = None
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
+    # `readiness`: issue weights, and device-decoration layers ignored everywhere (see readiness.py).
+    readiness_weights: dict[str, float] = field(default_factory=lambda: dict(READINESS_WEIGHTS))
+    ignore_layers: list[str] = field(default_factory=lambda: list(DEFAULT_IGNORE_LAYERS))
     # Where the config file came from (None = defaults only). Informational.
     source: str | None = None
 
@@ -211,8 +222,20 @@ def _from_dict(data: dict, base: Path) -> Config:
     agent = _section(data, "agent")
     paths = _section(data, "paths")
     figma = _section(data, "figma")
+    readiness = _section(data, "readiness")
 
     cfg = Config()
+    weights = readiness.get("weights") or {}
+    if not isinstance(weights, dict):
+        raise ValueError("readiness.weights must be a mapping, e.g. {missing_component: 6}")
+    unknown = sorted(set(weights) - set(READINESS_WEIGHTS))
+    if unknown:
+        raise ValueError(f"readiness.weights: unknown issue(s) {', '.join(unknown)}; "
+                         f"known: {', '.join(READINESS_WEIGHTS)}")
+    cfg.readiness_weights.update({k: float(v) for k, v in weights.items()})
+    if "ignore_layers" in readiness:
+        layers = readiness["ignore_layers"] or []
+        cfg.ignore_layers = [layers] if isinstance(layers, str) else [str(x) for x in layers]
     cfg.llm_base_url = str(llm.get("base_url", cfg.llm_base_url))
     cfg.llm_model = str(llm.get("model", cfg.llm_model))
     cfg.llm_api_key = str(llm.get("api_key", cfg.llm_api_key))
@@ -280,4 +303,5 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
                   "traces": cfg.trace_dir, "figma_json": cfg.figma_json_dir, "compare": cfg.compare_dir,
                   "repo_root": cfg.repo_root},
         "platforms": {name: vars(pc) for name, pc in cfg.platforms.items()},
+        "readiness": {"weights": cfg.readiness_weights, "ignore_layers": cfg.ignore_layers},
     }

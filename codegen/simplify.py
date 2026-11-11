@@ -5,8 +5,10 @@ instead of being guessed.
 """
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass, field
 
+from .config import DEFAULT_IGNORE_LAYERS  # device decoration: no spec node, no warning
 from .design_system import DesignSystem, figma_color_to_hex
 from .naming import camel, pascal, strip_suffix
 
@@ -42,6 +44,7 @@ class SimplifyResult:
     used_components: set[str] = field(default_factory=set)
     used_tokens: set[str] = field(default_factory=set)
     issues: list[FigmaWarning] = field(default_factory=list)
+    ignored: list[dict] = field(default_factory=list)      # [{"name", "id"}] layers skipped by ignore_layers
 
     @property
     def warnings(self) -> list[str]:
@@ -56,9 +59,17 @@ def _visible_children(n: dict) -> list[dict]:
     return [c for c in n.get("children", []) or [] if _visible(c)]
 
 
+def is_ignored(name: str | None, patterns: list[str]) -> bool:
+    """Case-insensitive glob match of a layer name against ignore patterns ('_*', '*Status Bar*')."""
+    low = (name or "").lower()
+    return any(fnmatch.fnmatchcase(low, p.lower()) for p in patterns)
+
+
 class Simplifier:
-    def __init__(self, ds: DesignSystem, node_entry: dict):
+    def __init__(self, ds: DesignSystem, node_entry: dict, ignore_layers: list[str] | None = None):
         self.ds = ds
+        self.ignore_layers = DEFAULT_IGNORE_LAYERS if ignore_layers is None else list(ignore_layers)
+        self.ignored: list[dict] = []
         self.components = node_entry.get("components", {}) or {}
         self.component_sets = node_entry.get("componentSets", {}) or {}
         self.styles = node_entry.get("styles", {}) or {}
@@ -78,9 +89,21 @@ class Simplifier:
             "root": root,
             "warnings": [str(w) for w in self.issues],
         }
-        return SimplifyResult(spec, self.used_components, self.used_tokens, self.issues)
+        return SimplifyResult(spec, self.used_components, self.used_tokens, self.issues, self.ignored)
 
     # ---------- helpers ----------
+    def _kids(self, n: dict) -> list[dict]:
+        """Visible children, minus device decoration (readiness.ignore_layers)."""
+        kids = []
+        for c in _visible_children(n):
+            if self.ignore_layers and is_ignored(c.get("name"), self.ignore_layers):
+                entry = {"name": c.get("name"), "id": c.get("id")}
+                if entry not in self.ignored:   # a node's children can be looked at twice
+                    self.ignored.append(entry)
+            else:
+                kids.append(c)
+        return kids
+
     def _warn(self, node: dict, msg: str, kind: str, **detail) -> None:
         self.issues.append(FigmaWarning(kind, node.get("name", "?"), node.get("id", ""), msg, detail))
 
@@ -232,7 +255,7 @@ class Simplifier:
             return False
         if t == "INSTANCE" and self._manifest_entry(n) is not None:
             return False
-        kids = _visible_children(n)
+        kids = [c for c in _visible_children(n) if not is_ignored(c.get("name"), self.ignore_layers)]
         return bool(kids) and all(self._is_graphic(c) for c in kids)
 
     def _graphic(self, n: dict, component: dict | None = None) -> dict:
@@ -275,7 +298,7 @@ class Simplifier:
             out = self._graphic(n, comp)
             out["figmaComponent"] = name
             return out
-        if not _visible_children(n):
+        if not self._kids(n):
             self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component", **comp)
             return {"type": "Unmapped", "name": n.get("name"), "id": n.get("id"), "figmaComponent": name}
         self._warn(n, f"instance of '{name}' is not in the UIKit manifest; expanded as plain layout",
@@ -285,7 +308,7 @@ class Simplifier:
         return out
 
     def _container(self, n: dict, parent_mode: str | None, is_root: bool) -> dict:
-        children = _visible_children(n)
+        children = self._kids(n)
         mode = n.get("layoutMode", "NONE") if n.get("type") != "GROUP" else "NONE"
         mode = mode or "NONE"
 
@@ -413,8 +436,9 @@ class Simplifier:
         return out
 
 
-def simplify(ds: DesignSystem, node_entry: dict) -> SimplifyResult:
-    return Simplifier(ds, node_entry).run()
+def simplify(ds: DesignSystem, node_entry: dict, ignore_layers: list[str] | None = None) -> SimplifyResult:
+    """ignore_layers: layer-name globs to drop (None = DEFAULT_IGNORE_LAYERS, [] = keep everything)."""
+    return Simplifier(ds, node_entry, ignore_layers).run()
 
 
 def without_ids(spec: dict) -> dict:

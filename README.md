@@ -259,6 +259,7 @@ figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export 
 figma-codegen status src/                            # generated screens: which frame, edited since?
 figma-codegen diff LoginScreen.kt                    # what changed in Figma since generation (no AI)
 figma-codegen update LoginScreen.kt --apply          # apply only those changes, keep developer edits
+figma-codegen readiness <frame-url> --html r.html    # is this frame ready for code? (for designers)
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
@@ -320,6 +321,7 @@ Per command:
 | `diff` | `changes` [{kind, path, node_name, detail, severity, node_id}], `gaps` |
 | `update` | `changes`, `applied`, `skipped` (needs a UIKit change first), `conflicts`, `updated_file`, `overwritten`, `baseline_file`, `diff` (unified), `draft_file`, `safety_issues`, `rounds`, `lint_issues`, `compile`, `gaps` |
 | `status` | `files` [{path, screen, platform, figma, generated_at, model, modified, missing}] or [{path, error}] |
+| `readiness` | `screen`, `score`, `level`, `node_count`, `issues` [{issue, label, count, weight, points, explanation, fix_in_figma, nodes [{name, id, url}]}], `ignored_layers`, `min_score`, `html_file` |
 | `skills`, `components`, `config` | `skills`, `components`, `config` + `env_overrides` |
 | `fetch`, `compare`, `import-compose` | `figma_json`; `compare_page`; `files` written |
 
@@ -552,6 +554,36 @@ model is told to declare them. If the model reorders them, the render fails to c
   becomes `"color": "transparent"` (space reserved for a selected state) without a warning. Widths use
   `border.*` tokens if that category exists, else `"2px"`.
 - **`gap`** is emitted only for containers with two or more children.
+
+## Readiness score (for designers)
+
+`figma-codegen readiness <frame-url> [--html FILE] [--min-score N]` answers "is this frame ready
+for code?" with a score and a level: **ready** (≥ 85), **almost** (60–84), **needs work** (< 60).
+No AI; it uses the same checks as `spec`. Each issue is explained in plain language with how to fix
+it in Figma and a link to every layer, worst first (example output):
+
+```
+Readiness: almost (72/100) — IdentityVerification, 64 layers, 3 device layer(s) ignored
+
+  18 components the app doesn't have  (−28 points)
+    These are library components that the app's UIKit has no equivalent for, so the code can't use them.
+    Fix in Figma: Swap them for a component from the UIKit library, or ask the design system team to add the component.
+    · SelectionCard  https://www.figma.com/design/AbC123?node-id=12-370
+```
+
+Score: `100 − 100 × Σ weights / (6 × nodes)`, floored at 0. Weights (`readiness.weights` in
+`codegen.yaml`): missing component 6, no auto-layout 6, hand-drawn graphic 3, unknown variant 3,
+color/text without a library style 2, value off the token scale 2, default layer name 1. A frame
+where every layer has a missing component scores 0; one missing component in a 30-layer screen
+costs about 3 points.
+
+`--html FILE` writes a self-contained page to share with designers. `--min-score N` exits `2`
+below N, as a gate in CI or at handoff (`figma-codegen --json readiness <url> --min-score 60`).
+
+**Device decoration is ignored everywhere.** Layers named `_*` or matching `readiness.ignore_layers`
+(default: `*Statusbar*`, `*Status Bar*`, `*Home Indicator*`, `*Keyboard*`, case-insensitive) produce
+no spec nodes and no warnings in `spec`, `generate`, `diff` and `update` too. Prefix any helper
+layer with `_` to keep it out of the code.
 
 ## Figma rules for designers
 

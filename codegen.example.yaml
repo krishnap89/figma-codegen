@@ -52,3 +52,17 @@ platforms:
     forbidden_patterns: []
     # render_cmd: ["xcodebuild", "test", "-scheme", "Sandbox", "-destination", "platform=iOS Simulator,name=iPhone 16",
     #              "-only-testing:SandboxTests/RenderTests/testRender", "-quiet"]
+
+# `figma-codegen readiness`: score a frame 0–100 for designers (ready ≥ 85, almost ≥ 60).
+readiness:
+  weights:                       # points an issue costs, before normalising by frame size
+    missing_component: 6
+    no_auto_layout: 6
+    hand_drawn_graphic: 3
+    unknown_variant: 3
+    unbound_style: 2
+    value_without_token: 2
+    default_name: 1
+  # Device decoration drawn in the frame. Ignored EVERYWHERE (spec, generate, warnings), not only
+  # in readiness. Case-insensitive globs; [] keeps every layer.
+  ignore_layers: ["_*", "*Statusbar*", "*Status Bar*", "*Home Indicator*", "*Keyboard*"]
