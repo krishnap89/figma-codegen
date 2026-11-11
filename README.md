@@ -260,6 +260,7 @@ figma-codegen status src/                            # generated screens: which 
 figma-codegen diff LoginScreen.kt                    # what changed in Figma since generation (no AI)
 figma-codegen update LoginScreen.kt --apply          # apply only those changes, keep developer edits
 figma-codegen readiness <frame-url> --html r.html    # is this frame ready for code? (for designers)
+figma-codegen mcp                                    # MCP server for IDE agents (see MCP server)
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
@@ -607,11 +608,62 @@ Run `figma-codegen spec` on a frame to see its warnings.
 | Figma → spec mapping | `codegen/simplify.py` |
 | add a tool | `codegen/tools.py` (method + schema) |
 
+## MCP server
+
+Any MCP-capable agent can use the design-system knowledge and checks: it reads the spec, looks
+up components and tokens, and lints and compiles its own code against your UIKit.
+
+```bash
+pip install 'figma-codegen[mcp]'      # the MCP SDK needs Python 3.10+; everything else runs on 3.9
+figma-codegen mcp                     # stdio
+figma-codegen mcp --http 127.0.0.1:8765   # streamable HTTP (endpoint /mcp)
+```
+
+Client configuration (stdio), e.g. in an agent's `mcp.json`:
+
+```json
+{"mcpServers": {"figma-codegen": {
+  "command": "figma-codegen", "args": ["mcp"], "cwd": "/path/to/app-repo",
+  "env": {"FIGMA_TOKEN": "...", "CODEGEN_CONFIG": "/path/to/codegen.yaml"}}}}
+```
+
+| tool | what | CLI equivalent |
+|---|---|---|
+| `get_figma_spec(figma_url)` | spec, warnings, selected skills, gaps | `spec` |
+| `check_design_readiness(figma_url)` | score, level, issues with Figma fixes | `readiness` |
+| `list_components(platform)` | UIKit components with one-line descriptions | — |
+| `get_component_docs(name, platform)` | the manifest entry | — |
+| `list_tokens(category, platform)` | tokens with their code expressions (`category` empty = all) | — |
+| `lint_design_system(code, platform)` | design-system lint issues | `lint` |
+| `compile_check(code, platform)` | compile in the sandbox (`platforms.<p>` must be configured) | — |
+| `generate_screen(figma_url, platform, out_path?, package?, apply?)` | the full `generate` workflow, plus the code | `generate` |
+| `diff_design(code_path, figma_url?)` | change list since generation | `diff` |
+| `update_screen(code_path, figma_url?, apply?)` | targeted update, plus the code and diff | `update` |
+
+Every tool returns the same JSON object as the CLI's `--json` output (tools without a CLI command
+use the same envelope). Resources: `figma-codegen://manifest/{platform}` and
+`figma-codegen://tokens/{platform}`. Prompts: `implement-figma-screen` and
+`update-screen-from-design`, which tell the agent to use `get_figma_spec` / `diff_design`, write
+code with UIKit components and tokens only, and run `lint_design_system` and `compile_check`.
+
+Safety:
+- **Workspace:** file paths must be inside `mcp.workspace_root` (or `--workspace DIR`; default: the
+  directory the server starts in). Paths outside it, including through symlinks, are rejected.
+- **No overwrites:** nothing is overwritten unless the call passes `apply=true`.
+  `generate_screen` refuses an existing file, and `update_screen` writes `<file>.updated`.
+- **Figma content is data:** layer names and texts only appear inside JSON fields, never in tool
+  descriptions or prompts.
+- **Traces:** every call is logged to `<paths.traces>/mcp-YYYYMMDD.jsonl` (tool, arguments with
+  long code shortened, duration, status).
+
 ## Tests
 
 ```bash
 pip install -e '.[dev]' && pytest
 ```
+
+The MCP protocol test runs only where the `mcp` extra is installed (Python 3.10+:
+`pip install -e '.[dev,mcp]'`); the tool functions are tested on every Python.
 
 Tests use a saved Figma response (`tests/fixtures/login_nodes.json`) and a scripted fake model,
 so they need no network, Figma token or LLM.
@@ -620,5 +672,4 @@ so they need no network, Figma token or LLM.
 
 - **Evaluation set:** 10–20 frames with known-good code; rerun after every prompt, manifest or model change.
 - **CI mode:** run `generate` from a pipeline triggered by a Jira ticket with a Figma link, and open a PR.
-- **MCP server:** the same `Tools`, `simplify` and `validate` functions can be exposed through the `mcp` SDK for IDE clients.
 - **Figma Variables API (Enterprise):** resolve bound variable IDs to token names directly instead of matching by value.

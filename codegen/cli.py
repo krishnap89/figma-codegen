@@ -12,6 +12,7 @@
   figma-codegen diff LoginScreen.kt                  # what changed in Figma since the code was generated
   figma-codegen update LoginScreen.kt --apply        # apply only those changes to the code
   figma-codegen readiness <figma-url> --html r.html  # is this frame ready for code? (for designers)
+  figma-codegen mcp                                  # MCP server for agents (pip install 'figma-codegen[mcp]')
 """
 from __future__ import annotations
 
@@ -734,6 +735,19 @@ def cmd_readiness(args, cfg) -> int:
     return 0
 
 
+def cmd_mcp(args, cfg) -> int:
+    from .mcp_server import INSTALL_HINT, serve
+
+    try:
+        import mcp  # noqa: F401
+    except ImportError:
+        raise CliError(INSTALL_HINT, kind="config") from None
+    if args.http and ":" not in args.http:
+        raise CliError(f"--http expects HOST:PORT, got {args.http!r}")
+    serve(args.config, args.http, args.workspace)
+    return 0
+
+
 def cmd_lint(args, cfg) -> int:
     code = Path(args.file).read_text()
     issues = lint(code, args.platform, cfg.platform(args.platform).forbidden_patterns)
@@ -921,6 +935,12 @@ def build_parser() -> argparse.ArgumentParser:
     rd.add_argument("--min-score", type=int, metavar="N",
                     help="exit 2 if the score is below N (for CI or handoff gates)")
     rd.set_defaults(func=cmd_readiness)
+
+    m = sub.add_parser("mcp", help="run the MCP server (stdio; --http for streamable HTTP) for IDE agents")
+    m.add_argument("--http", metavar="HOST:PORT", help="serve streamable HTTP instead of stdio, e.g. 127.0.0.1:8765")
+    m.add_argument("--workspace", metavar="DIR",
+                   help="only files under DIR may be read or written (default: mcp.workspace_root, else cwd)")
+    m.set_defaults(func=cmd_mcp)
 
     l = sub.add_parser("lint", help="design-system lint for a file")
     l.add_argument("file")

@@ -78,6 +78,8 @@ class Config:
     # `readiness`: issue weights, and device-decoration layers ignored everywhere (see readiness.py).
     readiness_weights: dict[str, float] = field(default_factory=lambda: dict(READINESS_WEIGHTS))
     ignore_layers: list[str] = field(default_factory=lambda: list(DEFAULT_IGNORE_LAYERS))
+    # `figma-codegen mcp`: tools may only read/write files under this directory (default: cwd).
+    mcp_workspace_root: str | None = None
     # Where the config file came from (None = defaults only). Informational.
     source: str | None = None
 
@@ -112,7 +114,7 @@ ENV_VARS: dict[str, str] = {
 }
 
 _PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.skills", "paths.traces",
-              "paths.figma_json", "paths.compare", "paths.repo_root"}
+              "paths.figma_json", "paths.compare", "paths.repo_root", "mcp.workspace_root"}
 _PLATFORM_PATH_FIELDS = {"sandbox_file", "compile_cwd", "render_cwd", "render_entry_file", "render_output"}
 _STRING_KEYS = {"llm.base_url", "llm.model", "llm.api_key", "figma.token"}
 
@@ -223,6 +225,7 @@ def _from_dict(data: dict, base: Path) -> Config:
     paths = _section(data, "paths")
     figma = _section(data, "figma")
     readiness = _section(data, "readiness")
+    mcp = _section(data, "mcp")
 
     cfg = Config()
     weights = readiness.get("weights") or {}
@@ -259,6 +262,7 @@ def _from_dict(data: dict, base: Path) -> Config:
     cfg.figma_json_dir = _resolve(base, paths.get("figma_json", cfg.figma_json_dir))  # empty/null disables saving
     cfg.compare_dir = _resolve(base, paths.get("compare") or cfg.compare_dir)
     cfg.repo_root = _resolve(base, paths.get("repo_root"))
+    cfg.mcp_workspace_root = _resolve(base, mcp.get("workspace_root"))
 
     def cmd_list(value: Any) -> list[str] | None:
         if isinstance(value, str):
@@ -304,4 +308,5 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
                   "repo_root": cfg.repo_root},
         "platforms": {name: vars(pc) for name, pc in cfg.platforms.items()},
         "readiness": {"weights": cfg.readiness_weights, "ignore_layers": cfg.ignore_layers},
+        "mcp": {"workspace_root": cfg.mcp_workspace_root},
     }
