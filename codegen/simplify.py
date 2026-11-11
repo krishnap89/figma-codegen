@@ -233,7 +233,7 @@ class Simplifier:
 
     def _graphic(self, n: dict) -> dict:
         box = n.get("absoluteBoundingBox") or {}
-        out: dict = {"type": "Graphic", "name": n.get("name"),
+        out: dict = {"type": "Graphic", "name": n.get("name"), "id": n.get("id"),
                      "sizePx": f"{box.get('width', 0):g}x{box.get('height', 0):g}"}
         self._sizing(n, out)
         self._warn(n, GRAPHIC_WARNING, "graphic")
@@ -267,7 +267,7 @@ class Simplifier:
             return out
         if not _visible_children(n):
             self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component")
-            return {"type": "Unmapped", "name": n.get("name"), "figmaComponent": name}
+            return {"type": "Unmapped", "name": n.get("name"), "id": n.get("id"), "figmaComponent": name}
         self._warn(n, f"instance of '{name}' is not in the UIKit manifest; expanded as plain layout",
                    "unknown_component")
         out = self._container(n, parent_mode, is_root)
@@ -282,12 +282,13 @@ class Simplifier:
         # Empty, unpainted frame inside auto-layout = spacer.
         if not children and not is_root and not self._has_paint(n) and parent_mode in ("VERTICAL", "HORIZONTAL"):
             if n.get("layoutGrow") == 1:
-                return {"type": "Spacer", "weight": 1}
+                return {"type": "Spacer", "id": n.get("id"), "weight": 1}
             box = n.get("absoluteBoundingBox") or {}
             size = box.get("height" if parent_mode == "VERTICAL" else "width", 0)
-            return {"type": "Spacer", "size": self._dim(size, "spacing", n, "spacer")}
+            return {"type": "Spacer", "id": n.get("id"), "size": self._dim(size, "spacing", n, "spacer")}
 
-        out: dict = {"type": {"VERTICAL": "Column", "HORIZONTAL": "Row"}.get(mode, "Box"), "name": n.get("name")}
+        out: dict = {"type": {"VERTICAL": "Column", "HORIZONTAL": "Row"}.get(mode, "Box"), "name": n.get("name"),
+                     "id": n.get("id")}
         if mode == "NONE" and len(children) > 1:
             self._warn(n, "no auto-layout; children positions are absolute and will be stacked. Add auto-layout in Figma.",
                        "no_auto_layout")
@@ -341,7 +342,7 @@ class Simplifier:
         style = n.get("style", {}) or {}
         style_name = self._style_name(n, "text")
         typo = self.ds.typography_token(style_name, style.get("fontSize"), style.get("fontWeight"))
-        out: dict = {"type": "Text", "name": n.get("name"), "text": n.get("characters", "")}
+        out: dict = {"type": "Text", "name": n.get("name"), "id": n.get("id"), "text": n.get("characters", "")}
         if typo:
             out["style"] = self._tok(typo)
         else:
@@ -377,7 +378,7 @@ class Simplifier:
                 if text is not None:
                     props[prop] = text
 
-        out: dict = {"component": entry["figma"], "name": n.get("name")}
+        out: dict = {"component": entry["figma"], "name": n.get("name"), "id": n.get("id")}
         if props:
             out["props"] = props
 
@@ -400,6 +401,17 @@ class Simplifier:
 
 def simplify(ds: DesignSystem, node_entry: dict) -> SimplifyResult:
     return Simplifier(ds, node_entry).run()
+
+
+def without_ids(spec: dict) -> dict:
+    """A copy of the spec without the per-node Figma "id" (kept for `diff`; noise in a prompt)."""
+    def strip(node):
+        if isinstance(node, dict):
+            return {k: strip(v) for k, v in node.items() if k != "id"}
+        if isinstance(node, list):
+            return [strip(v) for v in node]
+        return node
+    return {k: (strip(v) if k == "root" else v) for k, v in spec.items()}
 
 
 def collect(spec_root: dict, key: str) -> list[str]:

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .design_system import DesignSystem
-from .simplify import SimplifyResult, collect
+from .simplify import SimplifyResult, collect, without_ids
 
 PLATFORMS = {
     "compose": {
@@ -137,7 +137,7 @@ def user_prompt(
         params=params,
     )
 
-    parts = [f"## Screen spec (from Figma)\n```json\n{json.dumps(spec, indent=1)}\n```"]
+    parts = [f"## Screen spec (from Figma)\n```json\n{json.dumps(without_ids(spec), indent=1)}\n```"]
     parts.append("## UIKit components used\n```json\n" + json.dumps(comp_docs, indent=1) + "\n```")
     if primitives:
         parts.append("## Layout primitives\n" + "\n".join(f"- {k}: `{v}`" for k, v in primitives.items()))

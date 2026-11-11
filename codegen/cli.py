@@ -9,6 +9,7 @@
   figma-codegen import-compose <uikit-module> --app <app-repo>   # draft manifest + tokens from Kotlin
   figma-codegen skills                               # list skills and check they are valid
   figma-codegen status src/                          # generated screens: Figma frame, edited since?
+  figma-codegen diff LoginScreen.kt                  # what changed in Figma since the code was generated
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ import httpx
 import yaml
 
 from .baseline import (SUFFIX as BASELINE_SUFFIX, BaselineError, FigmaRef, add_header, code_path_for,
-                       is_code_modified, load_baseline, write_baseline)
+                       is_code_modified, load_baseline, sha256_file, write_baseline)
 from .compare import write_compare_page
 from .config import ENV_VARS, describe, load_config
 from .design_system import DesignSystem
@@ -37,6 +38,7 @@ from .render import render as render_screen
 from .report import format_warnings
 from .simplify import SimplifyResult, simplify
 from .skills import SkillPlan, scan_skills, plan_skills
+from .specdiff import diff_specs, render_changes
 from .style import Style
 from .validate import SandboxConfigError, check_sandbox, lint
 
@@ -442,6 +444,66 @@ def cmd_status(args, cfg) -> int:
     return 1 if problems else 0
 
 
+EXIT_CHANGES = 10   # `diff`: the design changed since the baseline
+
+
+def _read_spec_file(path: str) -> dict:
+    """A spec (`spec --out`), a bare root node, or a baseline file (its stored spec)."""
+    data = json.loads(Path(path).read_text())
+    if isinstance(data, dict) and "schema" in data and isinstance(data.get("spec"), dict):
+        return data["spec"]
+    if isinstance(data, dict) and ("root" in data or "type" in data or "component" in data):
+        return data
+    raise ValueError("expected a spec (from `figma-codegen spec --out`) or a .codegen.json baseline")
+
+
+def cmd_diff(args, cfg) -> int:
+    st = Style.for_stream(sys.stdout)
+    err = Style.for_stream(sys.stderr)
+    if args.specs:
+        if args.code_file or args.figma_url or args.figma_json:
+            print(f"{st.err('error:')} --specs compares two files; drop the code file / Figma source")
+            return 2
+        try:
+            old, new = (_read_spec_file(f) for f in args.specs)
+        except (OSError, ValueError) as e:
+            print(f"{st.err('error:')} --specs: {e}")
+            return 2
+    else:
+        if not args.code_file:
+            print(f"{st.err('error:')} pass a generated code file (or --specs OLD.json NEW.json)")
+            return 2
+        try:
+            b = load_baseline(args.code_file)
+        except BaselineError as e:
+            print(f"{st.err('error:')} {e}")
+            return 2
+        if b is None:
+            print(f"{st.err('error:')} {args.code_file} has no baseline; run `figma-codegen generate` first")
+            return 2
+        if not args.figma_url and not args.figma_json:
+            if not b.figma.url:
+                print(f"{st.err('error:')} the baseline has no Figma URL (generated from --figma-json); "
+                      "pass the frame URL or --figma-json")
+                return 2
+            args.figma_url = b.figma.url
+        _, result, frame = _simplify(args, cfg, Progress())
+        if frame.node_id and b.figma.node_id and frame.node_id != b.figma.node_id:
+            print(err.warn(f"note: comparing with node {frame.node_id}, but the code was generated from "
+                           f"node {b.figma.node_id}"), file=sys.stderr)
+        for label, path, old_hash in (("manifest", cfg.manifest_path, b.manifest_sha256),
+                                      ("tokens", cfg.tokens_path, b.tokens_sha256)):
+            if old_hash and Path(path).is_file() and sha256_file(path) != old_hash:
+                print(err.warn(f"note: the {label} file changed since generation; mapping changes can show up "
+                               "as design changes"), file=sys.stderr)
+        if result.issues:
+            print(format_warnings(result.issues, args.verbose, err), file=sys.stderr)
+        old, new = b.spec, result.spec
+    changes = diff_specs(old, new)
+    print(render_changes(changes, st))
+    return EXIT_CHANGES if changes else 0
+
+
 def cmd_lint(args, cfg) -> int:
     code = Path(args.file).read_text()
     issues = lint(code, args.platform, cfg.platform(args.platform).forbidden_patterns)
@@ -586,6 +648,14 @@ def build_parser() -> argparse.ArgumentParser:
     stt = sub.add_parser("status", help="generated screens: which Figma frame, when, and edited since?")
     stt.add_argument("path", help="a generated code file, or a directory to scan for *.codegen.json")
     stt.set_defaults(func=cmd_status)
+
+    d = sub.add_parser("diff", help="what changed in the Figma frame since the code was generated (no AI); "
+                                    "exit 10 when there are changes")
+    d.add_argument("code_file", nargs="?", help="a generated file with a baseline (<file>.codegen.json)")
+    add_source(d)
+    d.add_argument("--specs", nargs=2, metavar=("OLD", "NEW"),
+                   help="compare two spec files (`spec --out`, or .codegen.json baselines) instead")
+    d.set_defaults(func=cmd_diff)
 
     l = sub.add_parser("lint", help="design-system lint for a file")
     l.add_argument("file")

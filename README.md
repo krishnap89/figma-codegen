@@ -257,6 +257,7 @@ figma-codegen components <library-file-url>          # list library components +
 figma-codegen skills                                 # list skills and check they are valid
 figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export vs. rendered code
 figma-codegen status src/                            # generated screens: which frame, edited since?
+figma-codegen diff LoginScreen.kt                    # what changed in Figma since generation (no AI)
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
@@ -284,14 +285,15 @@ without spending API requests. Change the folder with `paths.figma_json` (empty 
 one file with `--save-figma-json PATH`.
 
 Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
-`3` LLM endpoint error. `status`: `0` all listed files have a usable baseline, `1` a file has no
+`3` LLM endpoint error. `diff`: `0` no changes, `10` changes found, `2` no/corrupt baseline or
+bad input. `status`: `0` all listed files have a usable baseline, `1` a file has no
 baseline or a corrupt one, `2` the path does not exist.
 
 ## Baseline
 
 A successful `generate` remembers where the screen came from, so a later design change can be
-diffed against it and applied as a targeted update instead of a full regeneration (planned
-`diff` / `update` commands). Next to the output it writes `<OutFile>.codegen.json`, e.g.
+diffed against it (`diff`, below) and applied as a targeted update instead of a full regeneration
+(planned `update` command). Next to the output it writes `<OutFile>.codegen.json`, e.g.
 `LoginScreen.kt.codegen.json`, containing:
 
 | field | |
@@ -322,6 +324,25 @@ generated and whether the code has been modified since:
 src/login/LoginScreen.kt  modified since generation
   LoginScreen (compose) · Figma AbC123 node 12:300 · generated 2026-11-11T10:02:41Z with qwen-coder
 ```
+
+### What changed in Figma: `diff`
+
+`figma-codegen diff <code-file>` simplifies the frame again (URL from the baseline, or pass a URL /
+`--figma-json`) and compares it with the spec the code was generated from. Deterministic, no AI:
+
+```
+3 changes
+visual     Title: style typography.heading/m → typography.heading/l
+visual     Form: gap spacing.s → spacing.m
+structure  + added Link "ForgotPasswordLink" — "Forgot password?" after PasswordField
+```
+
+Severity: `visual` (tokens, props, alignment, sizing), `content` (texts and component copy),
+`structure` (added/removed/moved nodes, a different component, Column↔Row, and changed state or
+callback names — these change the screen's public API). Layers are matched by Figma node id first
+(spec nodes carry an `"id"`; it is left out of the prompt), then by name and type under the same
+parent, so a rename in Figma is not a change and a moved group is one change, not one per layer.
+`diff --specs OLD NEW` compares two spec files (`spec --out` output or `.codegen.json` baselines).
 
 ## Visual check (no AI)
 
