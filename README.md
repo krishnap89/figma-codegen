@@ -264,7 +264,8 @@ figma-codegen update LoginScreen.kt --apply          # apply only those changes,
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
 `--skill NAME` / `--no-skills` (see [Skills](#skills)),
 `--repo` (enables code search tools), `--no-baseline` (see [Baseline](#baseline)), `--figma-json` (offline: saved `/v1/files/:key/nodes` response),
-`-v/--verbose` (also on `spec`: list every Figma warning).
+`-v/--verbose` (also on `spec`: list every Figma warning), `--gaps FILE.md` / `--gaps-json FILE`
+(also on `spec`, `diff`, `update`; see [Design-system gaps](#design-system-gaps)).
 
 While it runs, progress goes to stderr: each step (fetching Figma, simplifying, `round 2/4 · generating`,
 `round 2/4 · lint + compile`) shows its elapsed time and the total. On a terminal the running step is a
@@ -369,10 +370,31 @@ written. If the file was edited since generation, `update` says so and writes `.
 `--apply`; review the diff and add `--force` to overwrite. When a change's old value (e.g.
 `AppTheme.spacing.s`, or the old text) no longer appears in the file, it is marked
 `possible conflict` and the model is told to leave a `// TODO(design-update): ...` rather than
-guess. That check is best effort: it looks for the old value anywhere in the file, not at the
+guess. Changes that need a UIKit change first (a component missing from the manifest, an
+unsupported variant) are not applied: `update` lists them under "needs a UIKit change first" and
+the model only leaves a `// TODO(design-system): ...` at that spot. That conflict check is best effort: it looks for the old value anywhere in the file, not at the
 changed node. If the model still fails after `agent.max_rounds`, the file is untouched and the
 last attempt is saved as `.updated.draft`. Traces (`*-update.jsonl`) log the change list and, per
 round, the changed-line count and safety-check results.
+
+## Design-system gaps
+
+Some refinements need a UIKit change, not a screen change. `--gaps FILE.md` (on `spec`, `generate`,
+`diff`, `update`) writes a report for the design system team, built from the Figma warnings:
+
+| section | what | owner |
+|---|---|---|
+| Components missing from UIKit | library components not in the manifest, with Figma key and how often used | design system team |
+| Variants UIKit does not support | e.g. `Button.Style = Tertiary`, with the supported values | design system team |
+| Values without a token | spacing/radius/color/typography values, with the nearest existing token | design system team |
+| Elements not from the library | hand-drawn graphics and loose shapes standing in for components | designer |
+
+Each item links to its Figma nodes (`https://www.figma.com/design/<file_key>?node-id=<id>`).
+`--gaps-json FILE` writes the same data as JSON, for ticket automation.
+
+```bash
+figma-codegen spec <frame-url> --gaps gaps.md
+```
 
 ## Visual check (no AI)
 

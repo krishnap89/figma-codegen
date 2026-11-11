@@ -24,6 +24,8 @@ from .simplify import collect
 from .specdiff import TOKEN_KEYS, Change, SpecTree, describe
 
 CONFLICT_KINDS = {"token_changed", "text_changed", "prop_changed"}
+# Changes that build something a blocking gap is about (gaps.py): deferred until UIKit has it.
+DEFERRABLE = {"node_added", "component_swapped", "prop_changed"}
 
 
 @dataclass
@@ -33,15 +35,20 @@ class UpdatePlan:
     components: list[str] = field(default_factory=list)       # components in the changed nodes
     tokens: list[str] = field(default_factory=list)           # tokens in the changes
     signature_may_change: bool = False
+    deferred: list[int] = field(default_factory=list)          # need a UIKit change first: TODO only
 
     def change_lines(self) -> list[str]:
-        """One line per change for the prompt, with the conflict note when there is one."""
+        """One line per change to apply, with the conflict note when there is one."""
         return [describe(c) + (f"  [{self.conflicts[i]}]" if i in self.conflicts else "")
-                for i, c in enumerate(self.changes)]
+                for i, c in enumerate(self.changes) if i not in self.deferred]
+
+    def deferred_lines(self) -> list[str]:
+        return [describe(self.changes[i]) for i in self.deferred]
 
     def trace(self) -> dict:
         return {"changes": [c.to_json() for c in self.changes],
                 "conflicts": {self.changes[i].path: note for i, note in self.conflicts.items()},
+                "deferred": [self.changes[i].path for i in self.deferred],
                 "signature_may_change": self.signature_may_change}
 
 
@@ -79,7 +86,9 @@ def _occurs(expr: str, code: str) -> bool:
 
 
 def plan_update(ds: DesignSystem, old_spec: dict, new_spec: dict, changes: list[Change], code: str,
-                platform: str) -> UpdatePlan:
+                platform: str, blocked_ids: set[str] | frozenset = frozenset()) -> UpdatePlan:
+    """blocked_ids: Figma node ids with a missing component / unknown variant (gaps.blocking_node_ids).
+    Changes that would build those nodes are deferred: the model only leaves a TODO(design-system)."""
     plan = UpdatePlan(changes)
     old_tree, new_tree = SpecTree(old_spec), SpecTree(new_spec)
     by_path = {**{old_tree.path(n): n for n in old_tree.nodes}, **{new_tree.path(n): n for n in new_tree.nodes}}
@@ -97,6 +106,11 @@ def plan_update(ds: DesignSystem, old_spec: dict, new_spec: dict, changes: list[
                 tokens.update(s for k in TOKEN_KEYS for s in _strings(n.get(k)))
         tokens.update(_strings(c.detail.get("old")) + _strings(c.detail.get("new")))
 
+        if c.kind in DEFERRABLE and blocked_ids:
+            ids = {n.get("id") for n in (nodes if c.kind != "prop_changed" else [])} | {c.node_id}
+            if ids & set(blocked_ids):
+                plan.deferred.append(i)
+                continue
         if c.kind in CONFLICT_KINDS:
             exprs = _old_expressions(ds, c, platform)
             if exprs and not any(_occurs(e, code) for e in exprs):

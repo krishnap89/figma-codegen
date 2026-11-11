@@ -30,6 +30,7 @@ from .baseline import (SUFFIX as BASELINE_SUFFIX, BaselineError, FigmaRef, add_h
 from .compare import write_compare_page
 from .config import ENV_VARS, describe, load_config
 from .design_system import DesignSystem
+from .gaps import Gap, blocking_node_ids, collect_gaps, render_json as render_gaps_json, render_markdown
 from .figma_client import (FigmaClient, default_image_name, default_json_name, load_node_from_file,
                            parse_figma_url, save_nodes_response)
 from .naming import pascal
@@ -144,8 +145,22 @@ def _print_plan(plan: SkillPlan, cfg, st: Style, stream, label: str = "skills", 
                       + ", ".join(s.name for s in plan.dropped)), file=stream)
 
 
+def _gaps(args, ds: DesignSystem, result: SimplifyResult, file_key: str | None, url: str | None) -> list[Gap]:
+    """Design-system gaps of the frame; written to --gaps (Markdown) / --gaps-json when given."""
+    gaps = collect_gaps(result.issues, ds)
+    screen = result.spec.get("screen", "Screen")
+    for path, render in ((getattr(args, "gaps", None), render_markdown),
+                         (getattr(args, "gaps_json", None), render_gaps_json)):
+        if path:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(render(gaps, screen, file_key, url))
+            print(f"gaps report: {path} ({len(gaps)} gap{'s' if len(gaps) != 1 else ''})", file=sys.stderr)
+    return gaps
+
+
 def cmd_spec(args, cfg) -> int:
-    ds, result, _ = _simplify(args, cfg, Progress())
+    ds, result, frame = _simplify(args, cfg, Progress())
+    _gaps(args, ds, result, frame.file_key, args.figma_url)
     text = json.dumps(result.spec, indent=2)
     if args.out:
         Path(args.out).write_text(text)
@@ -195,6 +210,7 @@ def cmd_generate(args, cfg) -> int:
     progress = Progress()
     st = Style.for_stream(sys.stdout)
     ds, result, frame = _simplify(args, cfg, progress)
+    _gaps(args, ds, result, frame.file_key, args.figma_url)
     if result.issues:
         print(format_warnings(result.issues, args.verbose, st))
         if args.strict:
@@ -503,6 +519,9 @@ def _current_vs_baseline(args, cfg, st: Style, progress: Progress):
 def cmd_diff(args, cfg) -> int:
     st = Style.for_stream(sys.stdout)
     if args.specs:
+        if args.gaps or args.gaps_json:
+            print(f"{st.err('error:')} --gaps needs the Figma frame (its warnings), not --specs")
+            return 2
         if args.code_file or args.figma_url or args.figma_json:
             print(f"{st.err('error:')} --specs compares two files; drop the code file / Figma source")
             return 2
@@ -518,7 +537,8 @@ def cmd_diff(args, cfg) -> int:
         loaded = _current_vs_baseline(args, cfg, st, Progress())
         if isinstance(loaded, int):
             return loaded
-        b, _, result, _ = loaded
+        b, ds, result, frame = loaded
+        _gaps(args, ds, result, frame.file_key or b.figma.file_key, args.figma_url or b.figma.url)
         old, new = b.spec, result.spec
     changes = diff_specs(old, new)
     print(render_changes(changes, st))
@@ -559,15 +579,20 @@ def cmd_update(args, cfg) -> int:
     if isinstance(loaded, int):
         return loaded
     b, ds, result, frame = loaded
+    gaps = _gaps(args, ds, result, frame.file_key or b.figma.file_key, args.figma_url or b.figma.url)
     changes = diff_specs(b.spec, result.spec)
     if not changes:
         print("up to date")
         return 0
     current = code_path.read_text()
-    plan = plan_update(ds, b.spec, result.spec, changes, current, b.platform)
+    plan = plan_update(ds, b.spec, result.spec, changes, current, b.platform, blocking_node_ids(gaps))
     print(render_changes(changes, st))
     for i, note in sorted(plan.conflicts.items()):
         print(st.warn(f"  {changes[i].node_name}: {note}"))
+    if plan.deferred:
+        print(st.warn("needs a UIKit change first (not applied; a TODO(design-system) comment marks the spot):"))
+        for line in plan.deferred_lines():
+            print(st.warn(f"  {line}"))
     if args.dry_run:
         return EXIT_CHANGES
 
@@ -582,7 +607,8 @@ def cmd_update(args, cfg) -> int:
 
     notes = ["Changes marked 'possible conflict' touch code a developer has changed: apply them only if the "
              "intent is clear, otherwise add the TODO(design-update) comment."] if plan.conflicts else None
-    prompt = update_prompt(ds, b.platform, current, plan.change_lines(), plan.components, plan.tokens, notes)
+    prompt = update_prompt(ds, b.platform, current, plan.change_lines(), plan.components, plan.tokens, notes,
+                           plan.deferred_lines())
     check = SafetyCheck(current, plan, b.platform, b.screen)
     print(f"Updating {b.platform} screen {st(b.screen, 'bold')} ({len(changes)} change"
           f"{'s' if len(changes) != 1 else ''}) with {st(cfg.llm_model, 'cyan')} " + st.dim(f"@ {cfg.llm_base_url}"))
@@ -725,6 +751,11 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("-v", "--verbose", action="store_true",
                         help="list every Figma warning instead of a summary grouped by type")
 
+    def add_gaps(sp):
+        sp.add_argument("--gaps", metavar="FILE.md",
+                        help="write a design-system gap report (missing components, variants, tokens)")
+        sp.add_argument("--gaps-json", metavar="FILE", help="the same gap report as JSON (for ticket automation)")
+
     def add_visual(sp):
         sp.add_argument("--figma-image", metavar="PNG", help="use this Figma export instead of the Figma API")
         sp.add_argument("--scale", type=float, default=2, help="Figma export scale (default 2)")
@@ -739,6 +770,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser("generate", help="generate screen code from a Figma frame")
     add_source(g)
+    add_gaps(g)
     g.add_argument("--platform", choices=["compose", "swiftui"], required=True)
     g.add_argument("--out", required=True, help="output file, e.g. LoginScreen.kt")
     g.add_argument("--name", help="screen name (default: from --out file name)")
@@ -773,6 +805,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("spec", help="print the simplified spec for a frame")
     add_source(s)
+    add_gaps(s)
     s.add_argument("--out")
     s.add_argument("--platform", choices=["compose", "swiftui"],
                    help="show the skills selected for this platform only (default: both)")
@@ -789,6 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "exit 10 when there are changes")
     d.add_argument("code_file", nargs="?", help="a generated file with a baseline (<file>.codegen.json)")
     add_source(d)
+    add_gaps(d)
     d.add_argument("--specs", nargs=2, metavar=("OLD", "NEW"),
                    help="compare two spec files (`spec --out`, or .codegen.json baselines) instead")
     d.set_defaults(func=cmd_diff)
@@ -796,6 +830,7 @@ def build_parser() -> argparse.ArgumentParser:
     u = sub.add_parser("update", help="apply what changed in Figma to an existing screen, keeping developer edits")
     u.add_argument("code_file", help="a generated file with a baseline (<file>.codegen.json)")
     add_source(u)
+    add_gaps(u)
     u.add_argument("--dry-run", action="store_true", help="only print the change list (exit 10 if there are changes)")
     u.add_argument("--apply", action="store_true",
                    help="overwrite the file and refresh the baseline (default: write <file>.updated)")

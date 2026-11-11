@@ -188,14 +188,21 @@ def update_system_prompt(platform: str) -> str:
 
 
 def update_prompt(ds: DesignSystem, platform: str, code: str, change_lines: list[str],
-                  components: list[str], tokens: list[str], notes: list[str] | None = None) -> str:
+                  components: list[str], tokens: list[str], notes: list[str] | None = None,
+                  deferred_lines: list[str] | None = None) -> str:
     """change_lines: one line per change (specdiff.describe), possibly with a conflict note.
-    components / tokens: only those that appear in the changes, so the prompt stays small."""
+    components / tokens: only those that appear in the changes, so the prompt stays small.
+    deferred_lines: changes that need a UIKit change first; only a TODO comment is added for them."""
     p = PLATFORMS[platform]
     docs = [d for d in (ds.component_doc(name, platform) for name in components) if d]
-    parts = [f"## Current file\n```{p['fence']}\n{code.rstrip()}\n```",
-             "## Design changes to apply (old → new)\n" + "\n".join(f"{i}. {line}" for i, line
-                                                                    in enumerate(change_lines, 1))]
+    parts = [f"## Current file\n```{p['fence']}\n{code.rstrip()}\n```"]
+    if change_lines:
+        parts.append("## Design changes to apply (old → new)\n"
+                     + "\n".join(f"{i}. {line}" for i, line in enumerate(change_lines, 1)))
+    if deferred_lines:
+        parts.append("## Do NOT implement: needs a UIKit change first\n"
+                     "For each of these, add `// TODO(design-system): <change>` where it belongs and change "
+                     "nothing else for it:\n" + "\n".join(f"- {line}" for line in deferred_lines))
     if docs:
         parts.append("## UIKit components in these changes\n```json\n" + json.dumps(docs, indent=1) + "\n```")
     if tokens:
@@ -203,6 +210,9 @@ def update_prompt(ds: DesignSystem, platform: str, code: str, change_lines: list
                      + "\n".join(f"{t} -> {ds.token_code(t, platform)}" for t in tokens) + "\n```")
     if notes:
         parts.append("## Notes\n" + "\n".join(f"- {n}" for n in notes))
-    parts.append(f"## Task\nApply the {len(change_lines)} change(s) above to the current file. "
-                 "Return the complete file.")
+    task = (f"Apply the {len(change_lines)} change(s) above to the current file" if change_lines
+            else "Only add the TODO(design-system) comments listed above")
+    if change_lines and deferred_lines:
+        task += " and add the TODO(design-system) comments"
+    parts.append(f"## Task\n{task}. Return the complete file.")
     return "\n\n".join(parts)

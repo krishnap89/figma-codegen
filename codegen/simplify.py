@@ -29,6 +29,8 @@ class FigmaWarning:
     node_name: str
     node_id: str
     message: str
+    # Structured facts for the gap report (gaps.py), e.g. {"category": "spacing", "value": 13}.
+    detail: dict = field(default_factory=dict, compare=False, hash=False)
 
     def __str__(self) -> str:
         return f"[{self.node_name} {self.node_id}] {self.message}"
@@ -79,8 +81,8 @@ class Simplifier:
         return SimplifyResult(spec, self.used_components, self.used_tokens, self.issues)
 
     # ---------- helpers ----------
-    def _warn(self, node: dict, msg: str, kind: str) -> None:
-        self.issues.append(FigmaWarning(kind, node.get("name", "?"), node.get("id", ""), msg))
+    def _warn(self, node: dict, msg: str, kind: str, **detail) -> None:
+        self.issues.append(FigmaWarning(kind, node.get("name", "?"), node.get("id", ""), msg, detail))
 
     def _tok(self, token: str | None) -> str | None:
         if token:
@@ -91,7 +93,8 @@ class Simplifier:
         token = self.ds.dimension_token(value, category)
         if token:
             return self._tok(token)
-        self._warn(node, f"{what}={value:g}px matches no {category} token", "dimension")
+        self._warn(node, f"{what}={value:g}px matches no {category} token", "dimension",
+                   category=category, value=value)
         return f"raw:{value:g}px"
 
     def _style_name(self, node: dict, style_key: str) -> str | None:
@@ -116,7 +119,8 @@ class Simplifier:
             return self._tok(token)
         bound = f"style '{style_name}'" if style_name else "no color style bound"
         self._warn(node, f"{what} color {hex_value} ({bound}) matches no color token",
-                   "color_style_unmapped" if style_name else "color_unbound")
+                   "color_style_unmapped" if style_name else "color_unbound",
+                   category="color", value=hex_value, style=style_name)
         return f"raw:{hex_value}"
 
     def _fill_color(self, node: dict, what: str = "fill") -> str | None:
@@ -231,13 +235,18 @@ class Simplifier:
         kids = _visible_children(n)
         return bool(kids) and all(self._is_graphic(c) for c in kids)
 
-    def _graphic(self, n: dict) -> dict:
+    def _graphic(self, n: dict, component: dict | None = None) -> dict:
+        """component: {"component", "key"} when the artwork is an instance of a library component."""
         box = n.get("absoluteBoundingBox") or {}
         out: dict = {"type": "Graphic", "name": n.get("name"), "id": n.get("id"),
                      "sizePx": f"{box.get('width', 0):g}x{box.get('height', 0):g}"}
         self._sizing(n, out)
-        self._warn(n, GRAPHIC_WARNING, "graphic")
+        self._warn(n, GRAPHIC_WARNING, "graphic", **(component or {}))
         return out
+
+    def _component_key(self, n: dict) -> str | None:
+        meta, set_meta = self._component_meta(n)
+        return set_meta.get("key") or meta.get("key")
 
     # ---------- node dispatch ----------
     def _node(self, n: dict, parent_mode: str | None, is_root: bool = False) -> dict | None:
@@ -261,15 +270,16 @@ class Simplifier:
     def _unmapped_instance(self, n: dict, parent_mode: str | None, is_root: bool) -> dict:
         """R1: keep the content of library components that are not in the manifest."""
         name = self._component_name(n)
+        comp = {"component": name, "key": self._component_key(n)}
         if not is_root and self._is_graphic(n):
-            out = self._graphic(n)
+            out = self._graphic(n, comp)
             out["figmaComponent"] = name
             return out
         if not _visible_children(n):
-            self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component")
+            self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component", **comp)
             return {"type": "Unmapped", "name": n.get("name"), "id": n.get("id"), "figmaComponent": name}
         self._warn(n, f"instance of '{name}' is not in the UIKit manifest; expanded as plain layout",
-                   "unknown_component")
+                   "unknown_component", **comp)
         out = self._container(n, parent_mode, is_root)
         out.setdefault("figmaComponent", name)
         return out
@@ -347,7 +357,8 @@ class Simplifier:
             out["style"] = self._tok(typo)
         else:
             self._warn(n, f"text style (style={style_name}, size={style.get('fontSize')}, weight={style.get('fontWeight')}) matches no typography token",
-                       "typography")
+                       "typography", category="typography", value=style.get("fontSize"),
+                       weight=style.get("fontWeight"), style=style_name)
             out["style"] = f"raw:{style.get('fontSize')}px/{style.get('fontWeight')}"
         color = self._fill_color(n, "text")
         if color:
@@ -367,11 +378,14 @@ class Simplifier:
                     continue
                 if "map" in spec:
                     if val not in spec["map"]:
-                        self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' has no mapping", "prop_value")
+                        self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' has no mapping", "prop_value",
+                                   component=entry["figma"], prop=spec["figmaProp"], value=val,
+                                   known=list(spec["map"]))
                         continue
                     val = spec["map"][val]
                 elif "values" in spec and val not in spec["values"]:
-                    self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' not in {spec['values']}", "prop_value")
+                    self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' not in {spec['values']}", "prop_value",
+                               component=entry["figma"], prop=spec["figmaProp"], value=val, known=list(spec["values"]))
                 props[prop] = val
             elif "figmaText" in spec:
                 text = self._find_text(n, spec["figmaText"])

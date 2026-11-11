@@ -117,6 +117,37 @@ class DesignSystem:
                     return path
         return None
 
+    # ---------- nearest token (gap report) ----------
+    def nearest_dimension(self, px: float, category: str) -> str | None:
+        dims = self._dims.get(category) or {}
+        return dims[min(dims, key=lambda v: (abs(v - px), v))] if dims else None
+
+    def nearest_color(self, hex_value: str) -> str | None:
+        def rgb(h: str) -> tuple[int, ...]:
+            h = normalize_hex(h)[1:7]
+            return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+        try:
+            target = rgb(hex_value)
+        except ValueError:
+            return None
+        best, best_d = None, None
+        for h, path in self._colors.items():
+            try:
+                d = sum((a - b) ** 2 for a, b in zip(rgb(h), target))
+            except ValueError:
+                continue
+            if best_d is None or d < best_d:
+                best, best_d = path, d
+        return best
+
+    def nearest_typography(self, font_size: float | None) -> str | None:
+        if font_size is None:
+            return None
+        sized = [(parse_px((t["value"] or {}).get("fontSize")), p) for p, t in self.tokens.items()
+                 if p.startswith("typography.") and isinstance(t["value"], dict)]
+        sized = [(s, p) for s, p in sized if s is not None]
+        return min(sized, key=lambda sp: (abs(sp[0] - font_size), sp[0]))[1] if sized else None
+
     def tokens_in(self, category: str) -> list[str]:
         return [p for p in self.tokens if p.split(".", 1)[0] == category]
 
