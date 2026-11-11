@@ -286,11 +286,42 @@ Every download (`fetch`, `spec`, `generate`) saves the raw Figma response to
 without spending API requests. Change the folder with `paths.figma_json` (empty disables saving), or
 one file with `--save-figma-json PATH`.
 
-Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
-`3` LLM endpoint error. `diff`: `0` no changes, `10` changes found, `2` no/corrupt baseline or
-bad input. `update`: `0` up to date or updated, `10` changes found (`--dry-run`), `1` still failing
-(`.updated.draft` written, file untouched), `2`/`3` as for `generate`. `status`: `0` all listed files have a usable baseline, `1` a file has no
-baseline or a corrupt one, `2` the path does not exist.
+### Exit codes
+
+| code | meaning |
+|---|---|
+| `0` | success; for `diff` / `update`: no changes (up to date) |
+| `1` | code still failing after all rounds (`.draft` / `.updated.draft` written, file untouched); `lint` found issues; `status` found a file without a usable baseline; `skills` found an invalid skill |
+| `2` | configuration, usage or design problem (bad config, missing baseline, `--strict` with warnings, sandbox misconfigured) |
+| `3` | LLM endpoint error |
+| `10` | changes found: `diff`, `update --dry-run` |
+
+### Machine-readable output: `--json`
+
+`figma-codegen --json <command> ...` (or `<command> --json`) prints exactly **one JSON object** on
+stdout when the command ends; progress, change lists, diffs and error messages go to stderr.
+Without `--json` nothing changes. For CI, the MCP server and IDE plugins:
+
+```bash
+figma-codegen --json spec --figma-json figma.json | python -m json.tool
+```
+
+Every object has `schema` (1), `command`, `status` (`success` | `failed` | `changes` | `up_to_date` |
+`error`), `exit_code`, `duration_s`, `warnings` (`{total, groups: [{kind, count, nodes: [{name, id}]}]}`)
+and, when `status` is `error`, `error: {type, message}` with `type` one of `usage`, `config`,
+`baseline`, `design`, `figma`, `llm`, `io`, `internal`. Errors never put a traceback on stdout.
+Per command:
+
+| command | fields |
+|---|---|
+| `spec` | `spec`, `spec_file`, `skills` (per platform: `selected` [{name, reason}], `dropped`), `gaps` |
+| `generate` | `screen`, `platform`, `output_file`, `draft_file`, `baseline_file`, `rounds`, `tool_calls`, `lint_issues` [{line, message}], `compile` {ok, skipped, output}, `trace`, `skills`, `gaps`, `compare_page` (with `--compare`) |
+| `lint` | `file`, `platform`, `issues` [{line, message}] |
+| `diff` | `changes` [{kind, path, node_name, detail, severity, node_id}], `gaps` |
+| `update` | `changes`, `applied`, `skipped` (needs a UIKit change first), `conflicts`, `updated_file`, `overwritten`, `baseline_file`, `diff` (unified), `draft_file`, `safety_issues`, `rounds`, `lint_issues`, `compile`, `gaps` |
+| `status` | `files` [{path, screen, platform, figma, generated_at, model, modified, missing}] or [{path, error}] |
+| `skills`, `components`, `config` | `skills`, `components`, `config` + `env_overrides` |
+| `fetch`, `compare`, `import-compose` | `figma_json`; `compare_page`; `files` written |
 
 ## Baseline
 
