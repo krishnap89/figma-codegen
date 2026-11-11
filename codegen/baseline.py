@@ -90,10 +90,15 @@ def add_header(code: str, figma: FigmaRef, code_path: str | Path) -> str:
 
     Plain `//` comments: valid in Kotlin and Swift, and skipped by the design-system lint.
     """
-    lines = code.splitlines()
+    return "\n".join(header_lines(figma, code_path) + strip_header(code).splitlines()) + "\n"
+
+
+def strip_header(code: str) -> str:
+    """The code without the provenance comment `add_header` puts on the first lines."""
+    lines = code.splitlines(keepends=True)
     if lines and lines[0].startswith(HEADER_MARK):
         lines = lines[2:] if len(lines) > 1 and lines[1].startswith("// Baseline:") else lines[1:]
-    return "\n".join(header_lines(figma, code_path) + lines) + "\n"
+    return "".join(lines)
 
 
 def write_baseline(out_path: str | Path, spec: dict, figma_ref: FigmaRef, platform: str, screen: str,

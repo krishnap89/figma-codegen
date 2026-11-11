@@ -58,7 +58,7 @@ def _children(node: dict) -> list[dict]:
     return node.get("children") or []
 
 
-class _Tree:
+class SpecTree:
     """Preorder index of a spec tree: parent, sibling index and readable path of every node."""
 
     def __init__(self, spec: dict):
@@ -129,7 +129,7 @@ def summarize(node: dict) -> str:
 
 class _Differ:
     def __init__(self, old: dict, new: dict):
-        self.old, self.new = _Tree(old), _Tree(new)
+        self.old, self.new = SpecTree(old), SpecTree(new)
         self.m: dict[int, dict] = {}     # id(old node) -> new node
         self.rev: dict[int, dict] = {}   # id(new node) -> old node
         self.changes: list[Change] = []
@@ -164,7 +164,7 @@ class _Differ:
                             break
 
     # ---------- emitting ----------
-    def _add(self, kind: str, tree: _Tree, node: dict, severity: str, **detail: Any) -> None:
+    def _add(self, kind: str, tree: SpecTree, node: dict, severity: str, **detail: Any) -> None:
         self.changes.append(Change(kind, tree.path(node), tree.label(node), detail, severity, node.get("id")))
 
     def run(self) -> list[Change]:

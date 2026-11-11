@@ -10,6 +10,7 @@
   figma-codegen skills                               # list skills and check they are valid
   figma-codegen status src/                          # generated screens: Figma frame, edited since?
   figma-codegen diff LoginScreen.kt                  # what changed in Figma since the code was generated
+  figma-codegen update LoginScreen.kt --apply        # apply only those changes to the code
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ from .progress import Progress, fmt_duration
 from .render import RenderConfigError, RenderError, ScreenShape, check_render
 from .render import render as render_screen
 from .report import format_warnings
+from .prompts import update_prompt
 from .simplify import SimplifyResult, simplify
 from .skills import SkillPlan, scan_skills, plan_skills
 from .specdiff import diff_specs, render_changes
@@ -166,6 +168,21 @@ def cmd_spec(args, cfg) -> int:
     return 0
 
 
+def _llm_error(e: Exception, cfg, st: Style) -> int | None:
+    """Print an LLM endpoint error and return exit code 3; None if `e` is not one."""
+    if type(e).__module__.startswith("openai"):
+        hint = ""
+        if getattr(e, "status_code", None) == 504 and not cfg.stream:
+            hint = " A gateway timed out waiting for the reply; turn streaming back on (llm.stream: true)."
+        print(f"{st.err('error:')} LLM request failed ({type(e).__name__}: {e}). "
+              f"Check llm.base_url / llm.model.{hint}")
+        return 3
+    if isinstance(e, httpx.HTTPError):  # the connection dropped while a streamed reply was being read
+        print(f"{st.err('error:')} LLM stream interrupted ({type(e).__name__}: {e}).")
+        return 3
+    return None
+
+
 def cmd_generate(args, cfg) -> int:
     from .agent import CodegenAgent
 
@@ -218,17 +235,10 @@ def cmd_generate(args, cfg) -> int:
         print(f"{st.err('error:')} {e}")
         return 2
     except Exception as e:
-        if type(e).__module__.startswith("openai"):
-            hint = ""
-            if getattr(e, "status_code", None) == 504 and not cfg.stream:
-                hint = " A gateway timed out waiting for the reply; turn streaming back on (llm.stream: true)."
-            print(f"{st.err('error:')} LLM request failed ({type(e).__name__}: {e}). "
-                  f"Check llm.base_url / llm.model.{hint}")
-            return 3
-        if isinstance(e, httpx.HTTPError):  # the connection dropped while a streamed reply was being read
-            print(f"{st.err('error:')} LLM stream interrupted ({type(e).__name__}: {e}).")
-            return 3
-        raise
+        rc = _llm_error(e, cfg, st)
+        if rc is None:
+            raise
+        return rc
 
     out = Path(args.out)
     took = fmt_duration(progress.elapsed)
@@ -457,9 +467,41 @@ def _read_spec_file(path: str) -> dict:
     raise ValueError("expected a spec (from `figma-codegen spec --out`) or a .codegen.json baseline")
 
 
+def _current_vs_baseline(args, cfg, st: Style, progress: Progress):
+    """Load the baseline of args.code_file and simplify the current frame (URL from the baseline unless one
+    is given). Returns (baseline, design system, SimplifyResult, Frame), or an exit code after an error.
+    Notes and Figma warnings go to stderr, so the change list on stdout stays clean."""
+    err = Style.for_stream(sys.stderr)
+    try:
+        b = load_baseline(args.code_file)
+    except BaselineError as e:
+        print(f"{st.err('error:')} {e}")
+        return 2
+    if b is None:
+        print(f"{st.err('error:')} {args.code_file} has no baseline; run `figma-codegen generate` first")
+        return 2
+    if not args.figma_url and not args.figma_json:
+        if not b.figma.url:
+            print(f"{st.err('error:')} the baseline has no Figma URL (generated from --figma-json); "
+                  "pass the frame URL or --figma-json")
+            return 2
+        args.figma_url = b.figma.url
+    ds, result, frame = _simplify(args, cfg, progress)
+    if frame.node_id and b.figma.node_id and frame.node_id != b.figma.node_id:
+        print(err.warn(f"note: comparing with node {frame.node_id}, but the code was generated from "
+                       f"node {b.figma.node_id}"), file=sys.stderr)
+    for label, path, old_hash in (("manifest", cfg.manifest_path, b.manifest_sha256),
+                                  ("tokens", cfg.tokens_path, b.tokens_sha256)):
+        if old_hash and Path(path).is_file() and sha256_file(path) != old_hash:
+            print(err.warn(f"note: the {label} file changed since generation; mapping changes can show up "
+                           "as design changes"), file=sys.stderr)
+    if result.issues:
+        print(format_warnings(result.issues, args.verbose, err), file=sys.stderr)
+    return b, ds, result, frame
+
+
 def cmd_diff(args, cfg) -> int:
     st = Style.for_stream(sys.stdout)
-    err = Style.for_stream(sys.stderr)
     if args.specs:
         if args.code_file or args.figma_url or args.figma_json:
             print(f"{st.err('error:')} --specs compares two files; drop the code file / Figma source")
@@ -473,35 +515,129 @@ def cmd_diff(args, cfg) -> int:
         if not args.code_file:
             print(f"{st.err('error:')} pass a generated code file (or --specs OLD.json NEW.json)")
             return 2
-        try:
-            b = load_baseline(args.code_file)
-        except BaselineError as e:
-            print(f"{st.err('error:')} {e}")
-            return 2
-        if b is None:
-            print(f"{st.err('error:')} {args.code_file} has no baseline; run `figma-codegen generate` first")
-            return 2
-        if not args.figma_url and not args.figma_json:
-            if not b.figma.url:
-                print(f"{st.err('error:')} the baseline has no Figma URL (generated from --figma-json); "
-                      "pass the frame URL or --figma-json")
-                return 2
-            args.figma_url = b.figma.url
-        _, result, frame = _simplify(args, cfg, Progress())
-        if frame.node_id and b.figma.node_id and frame.node_id != b.figma.node_id:
-            print(err.warn(f"note: comparing with node {frame.node_id}, but the code was generated from "
-                           f"node {b.figma.node_id}"), file=sys.stderr)
-        for label, path, old_hash in (("manifest", cfg.manifest_path, b.manifest_sha256),
-                                      ("tokens", cfg.tokens_path, b.tokens_sha256)):
-            if old_hash and Path(path).is_file() and sha256_file(path) != old_hash:
-                print(err.warn(f"note: the {label} file changed since generation; mapping changes can show up "
-                               "as design changes"), file=sys.stderr)
-        if result.issues:
-            print(format_warnings(result.issues, args.verbose, err), file=sys.stderr)
+        loaded = _current_vs_baseline(args, cfg, st, Progress())
+        if isinstance(loaded, int):
+            return loaded
+        b, _, result, _ = loaded
         old, new = b.spec, result.spec
     changes = diff_specs(old, new)
     print(render_changes(changes, st))
     return EXIT_CHANGES if changes else 0
+
+
+def _print_diff(text: str, st: Style) -> None:
+    for line in text.splitlines():
+        if line.startswith(("+++", "---")):
+            print(st(line, "bold"))
+        elif line.startswith("+"):
+            print(st.ok(line))
+        elif line.startswith("-"):
+            print(st.err(line))
+        elif line.startswith("@@"):
+            print(st(line, "cyan"))
+        else:
+            print(line)
+
+
+def cmd_update(args, cfg) -> int:
+    from .agent import CodegenAgent
+    from .update import SafetyCheck, plan_update, unified_diff
+
+    if args.no_tools:
+        cfg.use_tools = False
+    if args.no_stream:
+        cfg.stream = False
+    if args.repo:
+        cfg.repo_root = str(Path(args.repo).resolve())
+    st = Style.for_stream(sys.stdout)
+    progress = Progress()
+    code_path = Path(args.code_file)
+    if not code_path.is_file():
+        print(f"{st.err('error:')} {code_path} does not exist")
+        return 2
+    loaded = _current_vs_baseline(args, cfg, st, progress)
+    if isinstance(loaded, int):
+        return loaded
+    b, ds, result, frame = loaded
+    changes = diff_specs(b.spec, result.spec)
+    if not changes:
+        print("up to date")
+        return 0
+    current = code_path.read_text()
+    plan = plan_update(ds, b.spec, result.spec, changes, current, b.platform)
+    print(render_changes(changes, st))
+    for i, note in sorted(plan.conflicts.items()):
+        print(st.warn(f"  {changes[i].node_name}: {note}"))
+    if args.dry_run:
+        return EXIT_CHANGES
+
+    try:
+        check_sandbox(cfg.platform(b.platform))
+    except SandboxConfigError as e:
+        print(f"{st.err('error:')} {e}\n  fix platforms.{b.platform} in codegen.yaml")
+        return 2
+    modified = is_code_modified(code_path, b)
+    if modified:
+        print(st.warn("note: file was edited since generation; developer changes are preserved, review the diff"))
+
+    notes = ["Changes marked 'possible conflict' touch code a developer has changed: apply them only if the "
+             "intent is clear, otherwise add the TODO(design-update) comment."] if plan.conflicts else None
+    prompt = update_prompt(ds, b.platform, current, plan.change_lines(), plan.components, plan.tokens, notes)
+    check = SafetyCheck(current, plan, b.platform, b.screen)
+    print(f"Updating {b.platform} screen {st(b.screen, 'bold')} ({len(changes)} change"
+          f"{'s' if len(changes) != 1 else ''}) with {st(cfg.llm_model, 'cyan')} " + st.dim(f"@ {cfg.llm_base_url}"))
+    try:
+        res = CodegenAgent(cfg, ds, progress=progress).run_update(prompt, b.platform, b.screen, check, plan.trace())
+    except SandboxConfigError as e:
+        print(f"{st.err('error:')} {e}")
+        return 2
+    except Exception as e:
+        rc = _llm_error(e, cfg, st)
+        if rc is None:
+            raise
+        return rc
+
+    took = fmt_duration(progress.elapsed)
+    if res.code is None:
+        print(f"{st.mark(False)} {st.err('the model did not return any code')}  {st.dim(f'(total {took})')}. "
+              f"{code_path} is unchanged.")
+        return 1
+    if not res.ok:
+        draft = code_path.with_name(code_path.name + ".updated.draft")
+        draft.write_text(res.code)
+        print(f"{st.mark(False)} {st.err(f'still failing after {res.rounds} rounds')} {st.dim(f'(total {took})')}. "
+              f"{code_path} is unchanged; draft saved to {st(str(draft), 'bold')}")
+        print(res.feedback())
+        if res.trace_path:
+            print(st.dim(f"  trace: {res.trace_path}"))
+        return 1
+
+    figma_ref = FigmaRef(frame.file_key or b.figma.file_key, frame.node_id or b.figma.node_id,
+                         args.figma_url or b.figma.url, frame.last_modified)
+    new_code = add_header(res.code, figma_ref, code_path)
+    apply = args.apply and (not modified or args.force)
+    target = code_path if apply else code_path.with_name(code_path.name + ".updated")
+    _print_diff(unified_diff(current, new_code, str(code_path), str(target)), st)
+    target.write_text(new_code)
+    print(f"{st.mark(True)} {st(str(target), 'bold', 'green')}  "
+          + st.dim(f"(rounds: {res.rounds}, tool calls: {res.tool_calls}, total {took})"))
+    if apply:
+        stale = code_path.with_name(code_path.name + ".updated")
+        if stale.exists():
+            stale.unlink()
+        written = write_baseline(code_path, result.spec, figma_ref, b.platform, b.screen, b.package, cfg,
+                                 cfg.llm_model)
+        print(st.dim(f"  baseline: {written}"))
+    elif args.apply:
+        print(st.warn(f"  not applied: {code_path} was edited since generation. Review the diff above, then "
+                      "pass --apply --force to overwrite it."))
+    else:
+        print(st.dim(f"  review the diff, then run again with --apply to write {code_path} and refresh the baseline"))
+    if res.validation and res.validation.compile_skipped:
+        print(st.warn("  note: not compiled — configure a sandbox in codegen.yaml"))
+    if res.trace_path:
+        print(st.dim(f"  trace: {res.trace_path}"))
+    return 0
 
 
 def cmd_lint(args, cfg) -> int:
@@ -656,6 +792,20 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--specs", nargs=2, metavar=("OLD", "NEW"),
                    help="compare two spec files (`spec --out`, or .codegen.json baselines) instead")
     d.set_defaults(func=cmd_diff)
+
+    u = sub.add_parser("update", help="apply what changed in Figma to an existing screen, keeping developer edits")
+    u.add_argument("code_file", help="a generated file with a baseline (<file>.codegen.json)")
+    add_source(u)
+    u.add_argument("--dry-run", action="store_true", help="only print the change list (exit 10 if there are changes)")
+    u.add_argument("--apply", action="store_true",
+                   help="overwrite the file and refresh the baseline (default: write <file>.updated)")
+    u.add_argument("--force", action="store_true",
+                   help="with --apply: overwrite even if the file was edited since generation")
+    u.add_argument("--repo", help="app repo root; enables search_code/read_file tools")
+    u.add_argument("--model", help="override llm.model")
+    u.add_argument("--no-tools", action="store_true", help="disable tool calling (if your server lacks it)")
+    u.add_argument("--no-stream", action="store_true", help="wait for the whole reply instead of streaming it")
+    u.set_defaults(func=cmd_update)
 
     l = sub.add_parser("lint", help="design-system lint for a file")
     l.add_argument("file")

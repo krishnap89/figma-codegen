@@ -258,6 +258,7 @@ figma-codegen skills                                 # list skills and check the
 figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export vs. rendered code
 figma-codegen status src/                            # generated screens: which frame, edited since?
 figma-codegen diff LoginScreen.kt                    # what changed in Figma since generation (no AI)
+figma-codegen update LoginScreen.kt --apply          # apply only those changes, keep developer edits
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
@@ -286,14 +287,15 @@ one file with `--save-figma-json PATH`.
 
 Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
 `3` LLM endpoint error. `diff`: `0` no changes, `10` changes found, `2` no/corrupt baseline or
-bad input. `status`: `0` all listed files have a usable baseline, `1` a file has no
+bad input. `update`: `0` up to date or updated, `10` changes found (`--dry-run`), `1` still failing
+(`.updated.draft` written, file untouched), `2`/`3` as for `generate`. `status`: `0` all listed files have a usable baseline, `1` a file has no
 baseline or a corrupt one, `2` the path does not exist.
 
 ## Baseline
 
 A successful `generate` remembers where the screen came from, so a later design change can be
 diffed against it (`diff`, below) and applied as a targeted update instead of a full regeneration
-(planned `update` command). Next to the output it writes `<OutFile>.codegen.json`, e.g.
+(`update`, below). Next to the output it writes `<OutFile>.codegen.json`, e.g.
 `LoginScreen.kt.codegen.json`, containing:
 
 | field | |
@@ -343,6 +345,34 @@ callback names — these change the screen's public API). Layers are matched by 
 (spec nodes carry an `"id"`; it is left out of the prompt), then by name and type under the same
 parent, so a rename in Figma is not a change and a moved group is one change, not one per layer.
 `diff --specs OLD NEW` compares two spec files (`spec --out` output or `.codegen.json` baselines).
+
+### Applying the change: `update`
+
+`figma-codegen update <code-file>` runs the same diff, then asks the model to apply **only those
+changes** to the current file: the prompt holds the file, the change list, and docs/tokens for just
+the components and tokens involved. Code outside the visual layout (state, callbacks, logic,
+comments, your own edits) must stay as it is. Before lint + compile, every answer is checked:
+
+- **line budget:** at most `max(20, 12 × changes)` lines may differ from the current file; a
+  rewrite of the whole file is rejected and the model is asked again,
+- **public signature:** the screen function and state class (SwiftUI: their stored properties)
+  must not change unless the design adds, removes or renames a binding or event.
+
+```bash
+figma-codegen update LoginScreen.kt --dry-run   # change list only (exit 10 if there are changes)
+figma-codegen update LoginScreen.kt             # writes LoginScreen.kt.updated + prints the diff
+figma-codegen update LoginScreen.kt --apply     # overwrites LoginScreen.kt, refreshes the baseline
+```
+
+Nothing is overwritten without `--apply`, and the baseline is refreshed only when the file is
+written. If the file was edited since generation, `update` says so and writes `.updated` even with
+`--apply`; review the diff and add `--force` to overwrite. When a change's old value (e.g.
+`AppTheme.spacing.s`, or the old text) no longer appears in the file, it is marked
+`possible conflict` and the model is told to leave a `// TODO(design-update): ...` rather than
+guess. That check is best effort: it looks for the old value anywhere in the file, not at the
+changed node. If the model still fails after `agent.max_rounds`, the file is untouched and the
+last attempt is saved as `.updated.draft`. Traces (`*-update.jsonl`) log the change list and, per
+round, the changed-line count and safety-check results.
 
 ## Visual check (no AI)
 
