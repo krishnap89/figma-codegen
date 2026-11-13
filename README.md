@@ -126,6 +126,68 @@ figma-codegen import-compose ../android-app/uikit --app ../android-app \
 Review the drafts, then point `paths.manifest` / `paths.tokens` at them (or copy them over) and run
 `figma-codegen spec <frame>` on a few real screens.
 
+### 0b. Figma side of the manifest: import it from Figma JSON
+
+Instead of copying component names, keys and property names out of Figma JSON by hand:
+
+```bash
+figma-codegen fetch "<component-set link>" --out figma/banner.json     # or use JSON you already saved
+figma-codegen import-figma figma/banner.json figma/button.json          # files, a folder of them, or links
+# -> manifest/imported/components.json + manifest/imported/figma-import-report.md
+```
+
+- **Input:** a component set node gives every variant value (`componentPropertyDefinitions`). A single variant
+  (`State=Neutral`) gives the set's name and key, plus the properties its layers reference: text (`✏️ Title`),
+  boolean (`👁 Title`) and instance swap (`✅ Caption Icon`). Its other variant values are unknown. A frame or
+  page adds the components its instances use, but only with the values seen there.
+- **Props** get the exact `figmaProp` names `spec` reads, emoji included. Code-side names come from the
+  property name: `✏️ Button Text` on Button → `text`, `👁 Title` → `showTitle`. Boolean variants (`True`/`False`)
+  and interaction states (`State=Normal|Pressed|Disabled` → `enabled`) are drafted as `map`.
+- **Merging:** by default `paths.manifest` is the base. Entries matched by key or name keep their `compose` /
+  `swiftui` code, `kind`, existing `map`s and prop names, and get the exact Figma name, key, new props and
+  variant values. `--out` set to the `--base` path updates it in place. `--no-base` starts a new manifest.
+- **New components** get a drafted import/signature/example in the base's naming style (`UiBanner`) and a
+  `todo` field. `spec` and `generate` print a note when a screen uses such an entry, until you check the code
+  API and delete `todo`.
+- **Skipped:** icons (components that are only vectors; they show up as instance-swap values), private
+  components (`.Close`, `_Base`) and `readiness.ignore_layers` matches.
+- `figma-import-report.md` lists every change and everything a human must decide: unmapped variant values in an
+  existing `map`, manifest props whose `figmaProp` doesn't exist in Figma, partial variant lists, and nested
+  buttons whose callbacks the spec can't express.
+
+Run it after `import-compose` (`--base manifest/imported/components.json --out manifest/imported/components.json`)
+to put exact Figma names and props onto the drafts that came from code.
+
+**Conventions.** The guesses above (`👁` → `show…`, `.`/`_` → private, `State=Disabled` → `enabled`, names →
+`kind`) are rules in the `figma_import:` section of `codegen.yaml`; see `codegen.example.yaml`. Change them to
+match your library. `prop_aliases: {Type: style}` maps a Figma property onto a code prop that is named
+differently.
+
+**Checking the library (for designers).** `--check` writes nothing. It lists where the components break
+those conventions, with what to change in Figma, and exits 1 when there are problems (CI or handoff gate):
+
+```
+$ figma-codegen import-figma figma/banner.json figma/button.json --check
+Banner
+  ✗ 'State' has Neutral: those describe what it is, not an interaction state
+      Fix in Figma: Rename the property (e.g. 'Tone' or 'Type'); keep 'State' for interaction states ...
+Button
+  ✗ '👁 Icon' is a variant with False/True
+      Fix in Figma: Make it a boolean property (unless switching it changes the layout).
+```
+
+| check | flags |
+|---|---|
+| `no_description` | a component set without a description (the model reads it) |
+| `boolean_variant` | a `True`/`False` (`Yes`/`No`, `On`/`Off`) variant instead of a boolean property |
+| `state_values` | a `state_props` variant (`State`) with values that aren't interaction states (`Neutral`, `Error`) |
+| `inconsistent_values` | the same value spelled differently across the library (`Disabled` / `disabled` / `Inactive`) |
+| `renamed_prop` | a variant the manifest knows under another name (`Type` in Figma, `Style` in code); needs a base manifest |
+| `text_not_property` | a text layer that isn't a text property, so instances can't change it |
+
+Turn single checks off with `figma_import.checks: {boolean_variant: false}`. A single variant or a component
+seen only in instances is checked partially (only the values seen); the output says which.
+
 ### 1. Fill in the manifest (`manifest/components.json`)
 
 One entry per UIKit component. The included Button / TextField / Link entries show the format:
@@ -325,6 +387,8 @@ Per command:
 | `readiness` | `screen`, `score`, `level`, `node_count`, `issues` [{issue, label, count, weight, points, explanation, fix_in_figma, nodes [{name, id, url}]}], `ignored_layers`, `min_score`, `html_file` |
 | `skills`, `components`, `config` | `skills`, `components`, `config` + `env_overrides` |
 | `fetch`, `compare`, `import-compose` | `figma_json`; `compare_page`; `files` written |
+| `import-figma` | `files` written, `base`, `components` [{figma, key, status, kind, props, changes, review}], `skipped` [{figma, reason}], `needs_review` |
+| `import-figma --check` | `checked` [{figma, key}], `problems` [{check, component, key, node_id, message, fix}], `partial`, `skipped`; status `failed` when there are problems |
 
 ## Baseline
 

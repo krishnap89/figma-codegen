@@ -7,6 +7,7 @@
   figma-codegen lint LoginScreen.kt --platform compose
   figma-codegen components <library-file-url>        # help build the manifest
   figma-codegen import-compose <uikit-module> --app <app-repo>   # draft manifest + tokens from Kotlin
+  figma-codegen import-figma banner.json <component-set-url>   # manifest names, keys, props from Figma
   figma-codegen skills                               # list skills and check they are valid
   figma-codegen status src/                          # generated screens: Figma frame, edited since?
   figma-codegen diff LoginScreen.kt                  # what changed in Figma since the code was generated
@@ -119,6 +120,11 @@ def _simplify(args, cfg, progress: Progress) -> tuple[DesignSystem, SimplifyResu
         n = len(result.issues)
         st.done(f"{n} warning{'s' if n != 1 else ''}" if n else "no warnings")
     args.report.warnings(result.issues)
+    drafts = sorted(n for n in result.used_components if (ds.component(n) or {}).get("todo"))
+    if drafts:   # import-figma drafts: their code API is a guess until someone checks it
+        progress.info(Style.for_stream(sys.stderr).warn(
+            f"  note: unreviewed manifest draft(s) used: {', '.join(drafts)} (`todo` in {cfg.manifest_path}); "
+            "their import/signature are guesses from Figma"))
     return ds, result, frame
 
 
@@ -812,6 +818,85 @@ def cmd_import_compose(args, cfg) -> int:
     return 0
 
 
+def _figma_sources(sources: list[str], cfg, progress: Progress) -> list[tuple[dict, str]]:
+    """Figma JSON files, directories of them, or Figma links -> [(node entry, label)]."""
+    from .figma_import import load_entries
+
+    entries: list[tuple[dict, str]] = []
+    for src in sources:
+        if src.startswith(("http://", "https://")):
+            with progress.step(f"fetching {src}"):
+                try:
+                    data, _, saved = _download(src, cfg, None)
+                except ValueError as e:
+                    raise CliError(str(e)) from None
+            if saved:
+                progress.info(f"  Figma JSON saved to {saved}")
+            entries += [(e, src) for e in data["nodes"].values() if e and e.get("document")]
+            continue
+        path = Path(src)
+        if not path.exists():
+            raise CliError(f"{src} does not exist")
+        files = sorted(path.glob("*.json")) if path.is_dir() else [path]
+        for f in files:
+            try:
+                entries += [(e, str(f)) for e in load_entries(f)]
+            except ValueError as e:
+                if path.is_dir():       # other JSON in the folder (a spec, a baseline): not Figma
+                    progress.info(f"  skipped {f}: {e}")
+                    continue
+                raise CliError(str(e)) from None
+    if not entries:
+        raise CliError("no Figma node JSON found in " + ", ".join(sources))
+    return entries
+
+
+def cmd_import_figma(args, cfg) -> int:
+    from .compose_import.components import DEFAULT_PRIMITIVES
+    from .figma_import import check, format_check, format_report, import_figma
+
+    progress = Progress()
+    base_path = None if args.no_base else Path(args.base or cfg.manifest_path)
+    if args.base and not base_path.exists():
+        raise CliError(f"--base {base_path} does not exist")
+    base = json.loads(base_path.read_text()) if base_path and base_path.exists() else None
+    if args.check:
+        res = check(_figma_sources(args.sources, cfg, progress), base, cfg.figma_import, cfg.ignore_layers)
+        print(format_check(res, Style.for_stream(sys.stdout)))
+        args.report.set(checked=[{"figma": n, "key": k} for n, k in res.checked],
+                        problems=[p.to_json() for p in res.problems], partial=res.partial,
+                        skipped=[{"figma": n, "reason": why} for n, why in res.skipped])
+        if res.problems:
+            args.report.status = "failed"
+        return 1 if res.problems else 0
+    out = Path(args.out or Path(cfg.manifest_path).parent / "imported" / "components.json")
+    report_path = out.parent / "figma-import-report.md"
+    in_place = base is not None and out.resolve() == base_path.resolve()
+    existing = [t for t in (out, report_path) if t.exists() and not (in_place and t == out)]
+    if existing and not args.force:
+        raise CliError(f"{', '.join(map(str, existing))} already exist; pass --force to overwrite")
+
+    entries = _figma_sources(args.sources, cfg, progress)
+    res = import_figma(entries, base, args.platform, {"compose": DEFAULT_PRIMITIVES}, cfg.ignore_layers,
+                       cfg.figma_import)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res.manifest, indent=2, ensure_ascii=False) + "\n")
+    report_path.write_text(format_report(res))
+    args.report.set(files=[str(out), str(report_path)], base=str(base_path) if base is not None else None,
+                    components=[{"figma": r.figma, "key": r.key, "status": r.status, "kind": r.kind,
+                                 "props": r.props, "changes": r.changes, "review": r.review} for r in res.rows],
+                    skipped=[{"figma": n, "reason": why} for n, why in res.skipped],
+                    needs_review=res.needs_review)
+    print(f"{len(entries)} Figma node(s) -> {res.count('new')} new, {res.count('updated')} updated, "
+          f"{res.count('unchanged')} unchanged component(s); {len(res.skipped)} skipped (icons, private)")
+    print(f"  base  {base_path if base is not None else '(none: new manifest)'}")
+    print(f"  wrote {out}")
+    print(f"  wrote {report_path}")
+    print(f"Review {report_path} ({res.needs_review} items need a human), then point paths.manifest at "
+          f"{out} (or copy the entries over) and run `figma-codegen spec <frame>` on a real screen.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="figma-codegen", description="Figma → UIKit code with your self-hosted LLM")
     p.add_argument("--config", help="path to codegen.yaml (default: $CODEGEN_CONFIG, ./codegen.yaml, "
@@ -959,6 +1044,25 @@ def build_parser() -> argparse.ArgumentParser:
     ic.add_argument("--out-dir", help="where to write the drafts (default: <manifest dir>/imported)")
     ic.add_argument("--force", action="store_true", help="overwrite existing drafts")
     ic.set_defaults(func=cmd_import_compose)
+
+    imf = sub.add_parser("import-figma", help="draft or update components.json from Figma component JSON "
+                                              "(names, keys, variants, props)")
+    imf.add_argument("sources", nargs="+", metavar="SOURCE",
+                     help="saved Figma JSON (`fetch` output), a directory of them, or a Figma link to a "
+                          "component set, component or page")
+    imf.add_argument("--base", metavar="JSON",
+                     help="manifest to update; its code sections are kept (default: paths.manifest, if it exists)")
+    imf.add_argument("--no-base", action="store_true", help="start a new manifest instead of updating one")
+    imf.add_argument("--out", metavar="JSON",
+                     help="where to write the manifest (default: <manifest dir>/imported/components.json); "
+                          "the same path as --base updates it in place")
+    imf.add_argument("--platform", choices=["compose", "swiftui"], action="append",
+                     help="platform section(s) to draft for new components (default: the base's primitives)")
+    imf.add_argument("--force", action="store_true", help="overwrite existing output")
+    imf.add_argument("--check", action="store_true",
+                     help="write nothing; list where the library breaks the naming conventions (figma_import in "
+                          "codegen.yaml), with how to fix each in Figma. Exit 1 if there are problems")
+    imf.set_defaults(func=cmd_import_figma)
     p.commands = list(sub.choices)
     for sp in sub.choices.values():   # `figma-codegen spec --json ...` works too
         sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)

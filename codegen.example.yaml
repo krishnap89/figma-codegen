@@ -66,3 +66,24 @@ readiness:
   # Device decoration drawn in the frame. Ignored EVERYWHERE (spec, generate, warnings), not only
   # in readiness. Case-insensitive globs; [] keeps every layer.
   ignore_layers: ["_*", "*Statusbar*", "*Status Bar*", "*Home Indicator*", "*Keyboard*"]
+
+# `figma-codegen import-figma`: the naming conventions of your Figma library. The importer uses them
+# to draft the manifest; `import-figma --check` lists where the library breaks them (for designers).
+figma_import:
+  private_prefixes: [".", "_"]          # building blocks never mapped to code
+  visibility_prefixes: ["👁"]           # boolean '👁 Title' -> prop showTitle
+  state_props: [State]                  # variants that hold interaction states only
+  interaction_states: [Default, Normal, Enabled, Rest, Idle, Hover, Hovered, Pressed, Active, Focus, Focused,
+                       Disabled, Inactive]
+  disabled_values: [Disabled, Inactive] # State=Disabled -> enabled: false
+  action_names: [Button, Link, Action, Chip, Tab, Menu Item, FAB]       # -> kind: action
+  input_names: [Text Field, Text Area, Input, Search Bar, Search Field, Field]   # -> kind: input
+  toggle_names: [Checkbox, Check Box, Switch, Toggle, Radio]              # -> kind: input, stateType: Boolean
+  prop_aliases: {}                      # Figma property -> manifest prop, e.g. {Type: style}
+  checks:                               # turn single --check rules off with false
+    no_description: true
+    boolean_variant: true
+    state_values: true
+    inconsistent_values: true
+    renamed_prop: true
+    text_not_property: true
