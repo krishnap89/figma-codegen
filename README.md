@@ -126,6 +126,68 @@ figma-codegen import-compose ../android-app/uikit --app ../android-app \
 Review the drafts, then point `paths.manifest` / `paths.tokens` at them (or copy them over) and run
 `figma-codegen spec <frame>` on a few real screens.
 
+### 0b. Figma side of the manifest: import it from Figma JSON
+
+Instead of copying component names, keys and property names out of Figma JSON by hand:
+
+```bash
+figma-codegen fetch "<component-set link>" --out figma/banner.json     # or use JSON you already saved
+figma-codegen import-figma figma/banner.json figma/button.json          # files, a folder of them, or links
+# -> manifest/imported/components.json + manifest/imported/figma-import-report.md
+```
+
+- **Input:** a component set node gives every variant value (`componentPropertyDefinitions`). A single variant
+  (`State=Neutral`) gives the set's name and key, plus the properties its layers reference: text (`✏️ Title`),
+  boolean (`👁 Title`) and instance swap (`✅ Caption Icon`). Its other variant values are unknown. A frame or
+  page adds the components its instances use, but only with the values seen there.
+- **Props** get the exact `figmaProp` names `spec` reads, emoji included. Code-side names come from the
+  property name: `✏️ Button Text` on Button → `text`, `👁 Title` → `showTitle`. Boolean variants (`True`/`False`)
+  and interaction states (`State=Normal|Pressed|Disabled` → `enabled`) are drafted as `map`.
+- **Merging:** by default `paths.manifest` is the base. Entries matched by key or name keep their `compose` /
+  `swiftui` code, `kind`, existing `map`s and prop names, and get the exact Figma name, key, new props and
+  variant values. `--out` set to the `--base` path updates it in place. `--no-base` starts a new manifest.
+- **New components** get a drafted import/signature/example in the base's naming style (`UiBanner`) and a
+  `todo` field. `spec` and `generate` print a note when a screen uses such an entry, until you check the code
+  API and delete `todo`.
+- **Skipped:** icons (components that are only vectors; they show up as instance-swap values), private
+  components (`.Close`, `_Base`) and `readiness.ignore_layers` matches.
+- `figma-import-report.md` lists every change and everything a human must decide: unmapped variant values in an
+  existing `map`, manifest props whose `figmaProp` doesn't exist in Figma, partial variant lists, and nested
+  buttons whose callbacks the spec can't express.
+
+Run it after `import-compose` (`--base manifest/imported/components.json --out manifest/imported/components.json`)
+to put exact Figma names and props onto the drafts that came from code.
+
+**Conventions.** The guesses above (`👁` → `show…`, `.`/`_` → private, `State=Disabled` → `enabled`, names →
+`kind`) are rules in the `figma_import:` section of `codegen.yaml`; see `codegen.example.yaml`. Change them to
+match your library. `prop_aliases: {Type: style}` maps a Figma property onto a code prop that is named
+differently.
+
+**Checking the library (for designers).** `--check` writes nothing. It lists where the components break
+those conventions, with what to change in Figma, and exits 1 when there are problems (CI or handoff gate):
+
+```
+$ figma-codegen import-figma figma/banner.json figma/button.json --check
+Banner
+  ✗ 'State' has Neutral: those describe what it is, not an interaction state
+      Fix in Figma: Rename the property (e.g. 'Tone' or 'Type'); keep 'State' for interaction states ...
+Button
+  ✗ '👁 Icon' is a variant with False/True
+      Fix in Figma: Make it a boolean property (unless switching it changes the layout).
+```
+
+| check | flags |
+|---|---|
+| `no_description` | a component set without a description (the model reads it) |
+| `boolean_variant` | a `True`/`False` (`Yes`/`No`, `On`/`Off`) variant instead of a boolean property |
+| `state_values` | a `state_props` variant (`State`) with values that aren't interaction states (`Neutral`, `Error`) |
+| `inconsistent_values` | the same value spelled differently across the library (`Disabled` / `disabled` / `Inactive`) |
+| `renamed_prop` | a variant the manifest knows under another name (`Type` in Figma, `Style` in code); needs a base manifest |
+| `text_not_property` | a text layer that isn't a text property, so instances can't change it |
+
+Turn single checks off with `figma_import.checks: {boolean_variant: false}`. A single variant or a component
+seen only in instances is checked partially (only the values seen); the output says which.
+
 ### 1. Fill in the manifest (`manifest/components.json`)
 
 One entry per UIKit component. The included Button / TextField / Link entries show the format:
@@ -256,12 +318,18 @@ figma-codegen lint LoginScreen.kt --platform compose
 figma-codegen components <library-file-url>          # list library components + keys (manifest work)
 figma-codegen skills                                 # list skills and check they are valid
 figma-codegen compare <frame-url> --code LoginScreen.kt --open   # Figma export vs. rendered code
+figma-codegen status src/                            # generated screens: which frame, edited since?
+figma-codegen diff LoginScreen.kt                    # what changed in Figma since generation (no AI)
+figma-codegen update LoginScreen.kt --apply          # apply only those changes, keep developer edits
+figma-codegen readiness <frame-url> --html r.html    # is this frame ready for code? (for designers)
+figma-codegen mcp                                    # MCP server for IDE agents (see MCP server)
 ```
 
 Useful flags for `generate`: `--strict` (abort on Figma warnings), `--no-tools`, `--no-stream`, `--model`,
 `--skill NAME` / `--no-skills` (see [Skills](#skills)),
-`--repo` (enables code search tools), `--figma-json` (offline: saved `/v1/files/:key/nodes` response),
-`-v/--verbose` (also on `spec`: list every Figma warning).
+`--repo` (enables code search tools), `--no-baseline` (see [Baseline](#baseline)), `--figma-json` (offline: saved `/v1/files/:key/nodes` response),
+`-v/--verbose` (also on `spec`: list every Figma warning), `--gaps FILE.md` / `--gaps-json FILE`
+(also on `spec`, `diff`, `update`; see [Design-system gaps](#design-system-gaps)).
 
 While it runs, progress goes to stderr: each step (fetching Figma, simplifying, `round 2/4 · generating`,
 `round 2/4 · lint + compile`) shows its elapsed time and the total. On a terminal the running step is a
@@ -282,8 +350,149 @@ Every download (`fetch`, `spec`, `generate`) saves the raw Figma response to
 without spending API requests. Change the folder with `paths.figma_json` (empty disables saving), or
 one file with `--save-figma-json PATH`.
 
-Exit codes: `0` success, `1` code still failing (`.draft` written), `2` config/design problem,
-`3` LLM endpoint error.
+### Exit codes
+
+| code | meaning |
+|---|---|
+| `0` | success; for `diff` / `update`: no changes (up to date) |
+| `1` | code still failing after all rounds (`.draft` / `.updated.draft` written, file untouched); `lint` found issues; `status` found a file without a usable baseline; `skills` found an invalid skill |
+| `2` | configuration, usage or design problem (bad config, missing baseline, `--strict` with warnings, sandbox misconfigured) |
+| `3` | LLM endpoint error |
+| `10` | changes found: `diff`, `update --dry-run` |
+
+### Machine-readable output: `--json`
+
+`figma-codegen --json <command> ...` (or `<command> --json`) prints exactly **one JSON object** on
+stdout when the command ends; progress, change lists, diffs and error messages go to stderr.
+Without `--json` nothing changes. For CI, the MCP server and IDE plugins:
+
+```bash
+figma-codegen --json spec --figma-json figma.json | python -m json.tool
+```
+
+Every object has `schema` (1), `command`, `status` (`success` | `failed` | `changes` | `up_to_date` |
+`error`), `exit_code`, `duration_s`, `warnings` (`{total, groups: [{kind, count, nodes: [{name, id}]}]}`)
+and, when `status` is `error`, `error: {type, message}` with `type` one of `usage`, `config`,
+`baseline`, `design`, `figma`, `llm`, `io`, `internal`. Errors never put a traceback on stdout.
+Per command:
+
+| command | fields |
+|---|---|
+| `spec` | `spec`, `spec_file`, `skills` (per platform: `selected` [{name, reason}], `dropped`), `gaps` |
+| `generate` | `screen`, `platform`, `output_file`, `draft_file`, `baseline_file`, `rounds`, `tool_calls`, `lint_issues` [{line, message}], `compile` {ok, skipped, output}, `trace`, `skills`, `gaps`, `compare_page` (with `--compare`) |
+| `lint` | `file`, `platform`, `issues` [{line, message}] |
+| `diff` | `changes` [{kind, path, node_name, detail, severity, node_id}], `gaps` |
+| `update` | `changes`, `applied`, `skipped` (needs a UIKit change first), `conflicts`, `updated_file`, `overwritten`, `baseline_file`, `diff` (unified), `draft_file`, `safety_issues`, `rounds`, `lint_issues`, `compile`, `gaps` |
+| `status` | `files` [{path, screen, platform, figma, generated_at, model, modified, missing}] or [{path, error}] |
+| `readiness` | `screen`, `score`, `level`, `node_count`, `issues` [{issue, label, count, weight, points, explanation, fix_in_figma, nodes [{name, id, url}]}], `ignored_layers`, `min_score`, `html_file` |
+| `skills`, `components`, `config` | `skills`, `components`, `config` + `env_overrides` |
+| `fetch`, `compare`, `import-compose` | `figma_json`; `compare_page`; `files` written |
+| `import-figma` | `files` written, `base`, `components` [{figma, key, status, kind, props, changes, review}], `skipped` [{figma, reason}], `needs_review` |
+| `import-figma --check` | `checked` [{figma, key}], `problems` [{check, component, key, node_id, message, fix}], `partial`, `skipped`; status `failed` when there are problems |
+
+## Baseline
+
+A successful `generate` remembers where the screen came from, so a later design change can be
+diffed against it (`diff`, below) and applied as a targeted update instead of a full regeneration
+(`update`, below). Next to the output it writes `<OutFile>.codegen.json`, e.g.
+`LoginScreen.kt.codegen.json`, containing:
+
+| field | |
+|---|---|
+| `figma` | `file_key`, `node_id`, `url`, `last_modified` (all `null` when `--figma-json` was used without a URL) |
+| `platform`, `screen`, `package` | as passed to `generate` |
+| `spec` | the full simplified spec the code was generated from |
+| `code_sha256` | hash of the written file, so you can tell when someone has edited it |
+| `manifest_sha256`, `tokens_sha256` | hashes of the design-system files used |
+| `tool_version`, `generated_at` (UTC), `model` | |
+
+The generated file starts with a two-line comment pointing at the frame and the baseline
+(before `package`; plain `//` comments, so lint and compile are unaffected):
+
+```kotlin
+// Generated by figma-codegen from Figma AbC123 node 12:300
+// Baseline: LoginScreen.kt.codegen.json — visual layer; update with `figma-codegen update`
+package com.company.login
+```
+
+Commit the baseline with the code: it doubles as the index from Figma frame to code file.
+A failed run (`.draft`) writes no baseline; `--no-baseline` skips both the file and the header.
+
+`figma-codegen status <file-or-dir>` lists every generated screen with its frame, when it was
+generated and whether the code has been modified since:
+
+```
+src/login/LoginScreen.kt  modified since generation
+  LoginScreen (compose) · Figma AbC123 node 12:300 · generated 2026-11-11T10:02:41Z with qwen-coder
+```
+
+### What changed in Figma: `diff`
+
+`figma-codegen diff <code-file>` simplifies the frame again (URL from the baseline, or pass a URL /
+`--figma-json`) and compares it with the spec the code was generated from. Deterministic, no AI:
+
+```
+3 changes
+visual     Title: style typography.heading/m → typography.heading/l
+visual     Form: gap spacing.s → spacing.m
+structure  + added Link "ForgotPasswordLink" — "Forgot password?" after PasswordField
+```
+
+Severity: `visual` (tokens, props, alignment, sizing), `content` (texts and component copy),
+`structure` (added/removed/moved nodes, a different component, Column↔Row, and changed state or
+callback names — these change the screen's public API). Layers are matched by Figma node id first
+(spec nodes carry an `"id"`; it is left out of the prompt), then by name and type under the same
+parent, so a rename in Figma is not a change and a moved group is one change, not one per layer.
+`diff --specs OLD NEW` compares two spec files (`spec --out` output or `.codegen.json` baselines).
+
+### Applying the change: `update`
+
+`figma-codegen update <code-file>` runs the same diff, then asks the model to apply **only those
+changes** to the current file: the prompt holds the file, the change list, and docs/tokens for just
+the components and tokens involved. Code outside the visual layout (state, callbacks, logic,
+comments, your own edits) must stay as it is. Before lint + compile, every answer is checked:
+
+- **line budget:** at most `max(20, 12 × changes)` lines may differ from the current file; a
+  rewrite of the whole file is rejected and the model is asked again,
+- **public signature:** the screen function and state class (SwiftUI: their stored properties)
+  must not change unless the design adds, removes or renames a binding or event.
+
+```bash
+figma-codegen update LoginScreen.kt --dry-run   # change list only (exit 10 if there are changes)
+figma-codegen update LoginScreen.kt             # writes LoginScreen.kt.updated + prints the diff
+figma-codegen update LoginScreen.kt --apply     # overwrites LoginScreen.kt, refreshes the baseline
+```
+
+Nothing is overwritten without `--apply`, and the baseline is refreshed only when the file is
+written. If the file was edited since generation, `update` says so and writes `.updated` even with
+`--apply`; review the diff and add `--force` to overwrite. When a change's old value (e.g.
+`AppTheme.spacing.s`, or the old text) no longer appears in the file, it is marked
+`possible conflict` and the model is told to leave a `// TODO(design-update): ...` rather than
+guess. Changes that need a UIKit change first (a component missing from the manifest, an
+unsupported variant) are not applied: `update` lists them under "needs a UIKit change first" and
+the model only leaves a `// TODO(design-system): ...` at that spot. That conflict check is best effort: it looks for the old value anywhere in the file, not at the
+changed node. If the model still fails after `agent.max_rounds`, the file is untouched and the
+last attempt is saved as `.updated.draft`. Traces (`*-update.jsonl`) log the change list and, per
+round, the changed-line count and safety-check results.
+
+## Design-system gaps
+
+Some refinements need a UIKit change, not a screen change. `--gaps FILE.md` (on `spec`, `generate`,
+`diff`, `update`) writes a report for the design system team, built from the Figma warnings:
+
+| section | what | owner |
+|---|---|---|
+| Components missing from UIKit | library components not in the manifest, with Figma key and how often used | design system team |
+| Variants UIKit does not support | e.g. `Button.Style = Tertiary`, with the supported values | design system team |
+| Values without a token | spacing/radius/color/typography values, with the nearest existing token | design system team |
+| Elements not from the library | hand-drawn graphics and loose shapes standing in for components | designer |
+
+Each item links to its Figma nodes (`https://www.figma.com/design/<file_key>?node-id=<id>`).
+`--gaps-json FILE` writes the same data as JSON, for ticket automation.
+
+```bash
+figma-codegen spec <frame-url> --gaps gaps.md
+```
 
 ## Visual check (no AI)
 
@@ -411,6 +620,36 @@ model is told to declare them. If the model reorders them, the render fails to c
   `border.*` tokens if that category exists, else `"2px"`.
 - **`gap`** is emitted only for containers with two or more children.
 
+## Readiness score (for designers)
+
+`figma-codegen readiness <frame-url> [--html FILE] [--min-score N]` answers "is this frame ready
+for code?" with a score and a level: **ready** (≥ 85), **almost** (60–84), **needs work** (< 60).
+No AI; it uses the same checks as `spec`. Each issue is explained in plain language with how to fix
+it in Figma and a link to every layer, worst first (example output):
+
+```
+Readiness: almost (72/100) — IdentityVerification, 64 layers, 3 device layer(s) ignored
+
+  18 components the app doesn't have  (−28 points)
+    These are library components that the app's UIKit has no equivalent for, so the code can't use them.
+    Fix in Figma: Swap them for a component from the UIKit library, or ask the design system team to add the component.
+    · SelectionCard  https://www.figma.com/design/AbC123?node-id=12-370
+```
+
+Score: `100 − 100 × Σ weights / (6 × nodes)`, floored at 0. Weights (`readiness.weights` in
+`codegen.yaml`): missing component 6, no auto-layout 6, hand-drawn graphic 3, unknown variant 3,
+color/text without a library style 2, value off the token scale 2, default layer name 1. A frame
+where every layer has a missing component scores 0; one missing component in a 30-layer screen
+costs about 3 points.
+
+`--html FILE` writes a self-contained page to share with designers. `--min-score N` exits `2`
+below N, as a gate in CI or at handoff (`figma-codegen --json readiness <url> --min-score 60`).
+
+**Device decoration is ignored everywhere.** Layers named `_*` or matching `readiness.ignore_layers`
+(default: `*Statusbar*`, `*Status Bar*`, `*Home Indicator*`, `*Keyboard*`, case-insensitive) produce
+no spec nodes and no warnings in `spec`, `generate`, `diff` and `update` too. Prefix any helper
+layer with `_` to keep it out of the code.
+
 ## Figma rules for designers
 
 The simplifier reports problems instead of guessing. Output quality depends on:
@@ -433,11 +672,62 @@ Run `figma-codegen spec` on a frame to see its warnings.
 | Figma → spec mapping | `codegen/simplify.py` |
 | add a tool | `codegen/tools.py` (method + schema) |
 
+## MCP server
+
+Any MCP-capable agent can use the design-system knowledge and checks: it reads the spec, looks
+up components and tokens, and lints and compiles its own code against your UIKit.
+
+```bash
+pip install 'figma-codegen[mcp]'      # the MCP SDK needs Python 3.10+; everything else runs on 3.9
+figma-codegen mcp                     # stdio
+figma-codegen mcp --http 127.0.0.1:8765   # streamable HTTP (endpoint /mcp)
+```
+
+Client configuration (stdio), e.g. in an agent's `mcp.json`:
+
+```json
+{"mcpServers": {"figma-codegen": {
+  "command": "figma-codegen", "args": ["mcp"], "cwd": "/path/to/app-repo",
+  "env": {"FIGMA_TOKEN": "...", "CODEGEN_CONFIG": "/path/to/codegen.yaml"}}}}
+```
+
+| tool | what | CLI equivalent |
+|---|---|---|
+| `get_figma_spec(figma_url)` | spec, warnings, selected skills, gaps | `spec` |
+| `check_design_readiness(figma_url)` | score, level, issues with Figma fixes | `readiness` |
+| `list_components(platform)` | UIKit components with one-line descriptions | — |
+| `get_component_docs(name, platform)` | the manifest entry | — |
+| `list_tokens(category, platform)` | tokens with their code expressions (`category` empty = all) | — |
+| `lint_design_system(code, platform)` | design-system lint issues | `lint` |
+| `compile_check(code, platform)` | compile in the sandbox (`platforms.<p>` must be configured) | — |
+| `generate_screen(figma_url, platform, out_path?, package?, apply?)` | the full `generate` workflow, plus the code | `generate` |
+| `diff_design(code_path, figma_url?)` | change list since generation | `diff` |
+| `update_screen(code_path, figma_url?, apply?)` | targeted update, plus the code and diff | `update` |
+
+Every tool returns the same JSON object as the CLI's `--json` output (tools without a CLI command
+use the same envelope). Resources: `figma-codegen://manifest/{platform}` and
+`figma-codegen://tokens/{platform}`. Prompts: `implement-figma-screen` and
+`update-screen-from-design`, which tell the agent to use `get_figma_spec` / `diff_design`, write
+code with UIKit components and tokens only, and run `lint_design_system` and `compile_check`.
+
+Safety:
+- **Workspace:** file paths must be inside `mcp.workspace_root` (or `--workspace DIR`; default: the
+  directory the server starts in). Paths outside it, including through symlinks, are rejected.
+- **No overwrites:** nothing is overwritten unless the call passes `apply=true`.
+  `generate_screen` refuses an existing file, and `update_screen` writes `<file>.updated`.
+- **Figma content is data:** layer names and texts only appear inside JSON fields, never in tool
+  descriptions or prompts.
+- **Traces:** every call is logged to `<paths.traces>/mcp-YYYYMMDD.jsonl` (tool, arguments with
+  long code shortened, duration, status).
+
 ## Tests
 
 ```bash
 pip install -e '.[dev]' && pytest
 ```
+
+The MCP protocol test runs only where the `mcp` extra is installed (Python 3.10+:
+`pip install -e '.[dev,mcp]'`); the tool functions are tested on every Python.
 
 Tests use a saved Figma response (`tests/fixtures/login_nodes.json`) and a scripted fake model,
 so they need no network, Figma token or LLM.
@@ -446,5 +736,4 @@ so they need no network, Figma token or LLM.
 
 - **Evaluation set:** 10–20 frames with known-good code; rerun after every prompt, manifest or model change.
 - **CI mode:** run `generate` from a pipeline triggered by a Jira ticket with a Figma link, and open a PR.
-- **MCP server:** the same `Tools`, `simplify` and `validate` functions can be exposed through the `mcp` SDK for IDE clients.
 - **Figma Variables API (Enterprise):** resolve bound variable IDs to token names directly instead of matching by value.

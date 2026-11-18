@@ -5,8 +5,10 @@ instead of being guessed.
 """
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass, field
 
+from .config import DEFAULT_IGNORE_LAYERS  # device decoration: no spec node, no warning
 from .design_system import DesignSystem, figma_color_to_hex
 from .naming import camel, pascal, strip_suffix
 
@@ -29,6 +31,8 @@ class FigmaWarning:
     node_name: str
     node_id: str
     message: str
+    # Structured facts for the gap report (gaps.py), e.g. {"category": "spacing", "value": 13}.
+    detail: dict = field(default_factory=dict, compare=False, hash=False)
 
     def __str__(self) -> str:
         return f"[{self.node_name} {self.node_id}] {self.message}"
@@ -40,6 +44,7 @@ class SimplifyResult:
     used_components: set[str] = field(default_factory=set)
     used_tokens: set[str] = field(default_factory=set)
     issues: list[FigmaWarning] = field(default_factory=list)
+    ignored: list[dict] = field(default_factory=list)      # [{"name", "id"}] layers skipped by ignore_layers
 
     @property
     def warnings(self) -> list[str]:
@@ -54,9 +59,17 @@ def _visible_children(n: dict) -> list[dict]:
     return [c for c in n.get("children", []) or [] if _visible(c)]
 
 
+def is_ignored(name: str | None, patterns: list[str]) -> bool:
+    """Case-insensitive glob match of a layer name against ignore patterns ('_*', '*Status Bar*')."""
+    low = (name or "").lower()
+    return any(fnmatch.fnmatchcase(low, p.lower()) for p in patterns)
+
+
 class Simplifier:
-    def __init__(self, ds: DesignSystem, node_entry: dict):
+    def __init__(self, ds: DesignSystem, node_entry: dict, ignore_layers: list[str] | None = None):
         self.ds = ds
+        self.ignore_layers = DEFAULT_IGNORE_LAYERS if ignore_layers is None else list(ignore_layers)
+        self.ignored: list[dict] = []
         self.components = node_entry.get("components", {}) or {}
         self.component_sets = node_entry.get("componentSets", {}) or {}
         self.styles = node_entry.get("styles", {}) or {}
@@ -76,11 +89,23 @@ class Simplifier:
             "root": root,
             "warnings": [str(w) for w in self.issues],
         }
-        return SimplifyResult(spec, self.used_components, self.used_tokens, self.issues)
+        return SimplifyResult(spec, self.used_components, self.used_tokens, self.issues, self.ignored)
 
     # ---------- helpers ----------
-    def _warn(self, node: dict, msg: str, kind: str) -> None:
-        self.issues.append(FigmaWarning(kind, node.get("name", "?"), node.get("id", ""), msg))
+    def _kids(self, n: dict) -> list[dict]:
+        """Visible children, minus device decoration (readiness.ignore_layers)."""
+        kids = []
+        for c in _visible_children(n):
+            if self.ignore_layers and is_ignored(c.get("name"), self.ignore_layers):
+                entry = {"name": c.get("name"), "id": c.get("id")}
+                if entry not in self.ignored:   # a node's children can be looked at twice
+                    self.ignored.append(entry)
+            else:
+                kids.append(c)
+        return kids
+
+    def _warn(self, node: dict, msg: str, kind: str, **detail) -> None:
+        self.issues.append(FigmaWarning(kind, node.get("name", "?"), node.get("id", ""), msg, detail))
 
     def _tok(self, token: str | None) -> str | None:
         if token:
@@ -91,7 +116,8 @@ class Simplifier:
         token = self.ds.dimension_token(value, category)
         if token:
             return self._tok(token)
-        self._warn(node, f"{what}={value:g}px matches no {category} token", "dimension")
+        self._warn(node, f"{what}={value:g}px matches no {category} token", "dimension",
+                   category=category, value=value)
         return f"raw:{value:g}px"
 
     def _style_name(self, node: dict, style_key: str) -> str | None:
@@ -116,7 +142,8 @@ class Simplifier:
             return self._tok(token)
         bound = f"style '{style_name}'" if style_name else "no color style bound"
         self._warn(node, f"{what} color {hex_value} ({bound}) matches no color token",
-                   "color_style_unmapped" if style_name else "color_unbound")
+                   "color_style_unmapped" if style_name else "color_unbound",
+                   category="color", value=hex_value, style=style_name)
         return f"raw:{hex_value}"
 
     def _fill_color(self, node: dict, what: str = "fill") -> str | None:
@@ -228,16 +255,21 @@ class Simplifier:
             return False
         if t == "INSTANCE" and self._manifest_entry(n) is not None:
             return False
-        kids = _visible_children(n)
+        kids = [c for c in _visible_children(n) if not is_ignored(c.get("name"), self.ignore_layers)]
         return bool(kids) and all(self._is_graphic(c) for c in kids)
 
-    def _graphic(self, n: dict) -> dict:
+    def _graphic(self, n: dict, component: dict | None = None) -> dict:
+        """component: {"component", "key"} when the artwork is an instance of a library component."""
         box = n.get("absoluteBoundingBox") or {}
-        out: dict = {"type": "Graphic", "name": n.get("name"),
+        out: dict = {"type": "Graphic", "name": n.get("name"), "id": n.get("id"),
                      "sizePx": f"{box.get('width', 0):g}x{box.get('height', 0):g}"}
         self._sizing(n, out)
-        self._warn(n, GRAPHIC_WARNING, "graphic")
+        self._warn(n, GRAPHIC_WARNING, "graphic", **(component or {}))
         return out
+
+    def _component_key(self, n: dict) -> str | None:
+        meta, set_meta = self._component_meta(n)
+        return set_meta.get("key") or meta.get("key")
 
     # ---------- node dispatch ----------
     def _node(self, n: dict, parent_mode: str | None, is_root: bool = False) -> dict | None:
@@ -261,33 +293,35 @@ class Simplifier:
     def _unmapped_instance(self, n: dict, parent_mode: str | None, is_root: bool) -> dict:
         """R1: keep the content of library components that are not in the manifest."""
         name = self._component_name(n)
+        comp = {"component": name, "key": self._component_key(n)}
         if not is_root and self._is_graphic(n):
-            out = self._graphic(n)
+            out = self._graphic(n, comp)
             out["figmaComponent"] = name
             return out
-        if not _visible_children(n):
-            self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component")
-            return {"type": "Unmapped", "name": n.get("name"), "figmaComponent": name}
+        if not self._kids(n):
+            self._warn(n, f"instance of '{name}' is not in the UIKit manifest", "unknown_component", **comp)
+            return {"type": "Unmapped", "name": n.get("name"), "id": n.get("id"), "figmaComponent": name}
         self._warn(n, f"instance of '{name}' is not in the UIKit manifest; expanded as plain layout",
-                   "unknown_component")
+                   "unknown_component", **comp)
         out = self._container(n, parent_mode, is_root)
         out.setdefault("figmaComponent", name)
         return out
 
     def _container(self, n: dict, parent_mode: str | None, is_root: bool) -> dict:
-        children = _visible_children(n)
+        children = self._kids(n)
         mode = n.get("layoutMode", "NONE") if n.get("type") != "GROUP" else "NONE"
         mode = mode or "NONE"
 
         # Empty, unpainted frame inside auto-layout = spacer.
         if not children and not is_root and not self._has_paint(n) and parent_mode in ("VERTICAL", "HORIZONTAL"):
             if n.get("layoutGrow") == 1:
-                return {"type": "Spacer", "weight": 1}
+                return {"type": "Spacer", "id": n.get("id"), "weight": 1}
             box = n.get("absoluteBoundingBox") or {}
             size = box.get("height" if parent_mode == "VERTICAL" else "width", 0)
-            return {"type": "Spacer", "size": self._dim(size, "spacing", n, "spacer")}
+            return {"type": "Spacer", "id": n.get("id"), "size": self._dim(size, "spacing", n, "spacer")}
 
-        out: dict = {"type": {"VERTICAL": "Column", "HORIZONTAL": "Row"}.get(mode, "Box"), "name": n.get("name")}
+        out: dict = {"type": {"VERTICAL": "Column", "HORIZONTAL": "Row"}.get(mode, "Box"), "name": n.get("name"),
+                     "id": n.get("id")}
         if mode == "NONE" and len(children) > 1:
             self._warn(n, "no auto-layout; children positions are absolute and will be stacked. Add auto-layout in Figma.",
                        "no_auto_layout")
@@ -341,12 +375,13 @@ class Simplifier:
         style = n.get("style", {}) or {}
         style_name = self._style_name(n, "text")
         typo = self.ds.typography_token(style_name, style.get("fontSize"), style.get("fontWeight"))
-        out: dict = {"type": "Text", "name": n.get("name"), "text": n.get("characters", "")}
+        out: dict = {"type": "Text", "name": n.get("name"), "id": n.get("id"), "text": n.get("characters", "")}
         if typo:
             out["style"] = self._tok(typo)
         else:
             self._warn(n, f"text style (style={style_name}, size={style.get('fontSize')}, weight={style.get('fontWeight')}) matches no typography token",
-                       "typography")
+                       "typography", category="typography", value=style.get("fontSize"),
+                       weight=style.get("fontWeight"), style=style_name)
             out["style"] = f"raw:{style.get('fontSize')}px/{style.get('fontWeight')}"
         color = self._fill_color(n, "text")
         if color:
@@ -366,18 +401,21 @@ class Simplifier:
                     continue
                 if "map" in spec:
                     if val not in spec["map"]:
-                        self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' has no mapping", "prop_value")
+                        self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' has no mapping", "prop_value",
+                                   component=entry["figma"], prop=spec["figmaProp"], value=val,
+                                   known=list(spec["map"]))
                         continue
                     val = spec["map"][val]
                 elif "values" in spec and val not in spec["values"]:
-                    self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' not in {spec['values']}", "prop_value")
+                    self._warn(n, f"{entry['figma']}.{spec['figmaProp']}='{val}' not in {spec['values']}", "prop_value",
+                               component=entry["figma"], prop=spec["figmaProp"], value=val, known=list(spec["values"]))
                 props[prop] = val
             elif "figmaText" in spec:
                 text = self._find_text(n, spec["figmaText"])
                 if text is not None:
                     props[prop] = text
 
-        out: dict = {"component": entry["figma"], "name": n.get("name")}
+        out: dict = {"component": entry["figma"], "name": n.get("name"), "id": n.get("id")}
         if props:
             out["props"] = props
 
@@ -398,8 +436,20 @@ class Simplifier:
         return out
 
 
-def simplify(ds: DesignSystem, node_entry: dict) -> SimplifyResult:
-    return Simplifier(ds, node_entry).run()
+def simplify(ds: DesignSystem, node_entry: dict, ignore_layers: list[str] | None = None) -> SimplifyResult:
+    """ignore_layers: layer-name globs to drop (None = DEFAULT_IGNORE_LAYERS, [] = keep everything)."""
+    return Simplifier(ds, node_entry, ignore_layers).run()
+
+
+def without_ids(spec: dict) -> dict:
+    """A copy of the spec without the per-node Figma "id" (kept for `diff`; noise in a prompt)."""
+    def strip(node):
+        if isinstance(node, dict):
+            return {k: strip(v) for k, v in node.items() if k != "id"}
+        if isinstance(node, list):
+            return [strip(v) for v in node]
+        return node
+    return {k: (strip(v) if k == "root" else v) for k, v in spec.items()}
 
 
 def collect(spec_root: dict, key: str) -> list[str]:

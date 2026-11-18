@@ -38,6 +38,38 @@ class PlatformConfig:
     render_timeout: int = 600
 
 
+READINESS_WEIGHTS: dict[str, float] = {
+    "missing_component": 6, "no_auto_layout": 6, "hand_drawn_graphic": 3, "unbound_style": 2,
+    "value_without_token": 2, "default_name": 1, "unknown_variant": 3,
+}
+# Same default as simplify.DEFAULT_IGNORE_LAYERS (kept here so config doesn't import the simplifier).
+DEFAULT_IGNORE_LAYERS = ["_*", "*Statusbar*", "*Status Bar*", "*Home Indicator*", "*Keyboard*"]
+
+
+# `import-figma --check`: library convention checks (see figma_import.py). All on by default.
+FIGMA_CHECKS = ("no_description", "boolean_variant", "state_values", "inconsistent_values", "renamed_prop",
+                "text_not_property")
+
+
+@dataclass
+class FigmaImportRules:
+    """The naming conventions `import-figma` relies on, and that `import-figma --check` asks designers to follow."""
+    private_prefixes: list[str] = field(default_factory=lambda: [".", "_"])       # building blocks, never mapped
+    visibility_prefixes: list[str] = field(default_factory=lambda: ["\U0001F441"])   # '👁 Title' -> showTitle
+    state_props: list[str] = field(default_factory=lambda: ["State"])            # variants for interaction states
+    interaction_states: list[str] = field(default_factory=lambda: [
+        "Default", "Normal", "Enabled", "Rest", "Idle", "Hover", "Hovered", "Pressed", "Active", "Focus",
+        "Focused", "Disabled", "Inactive"])
+    disabled_values: list[str] = field(default_factory=lambda: ["Disabled", "Inactive"])
+    action_names: list[str] = field(default_factory=lambda: [
+        "Button", "Link", "Action", "Chip", "Tab", "Menu Item", "FAB"])
+    input_names: list[str] = field(default_factory=lambda: [
+        "Text Field", "Text Area", "Input", "Search Bar", "Search Field", "Field"])
+    toggle_names: list[str] = field(default_factory=lambda: ["Checkbox", "Check Box", "Switch", "Toggle", "Radio"])
+    prop_aliases: dict[str, str] = field(default_factory=dict)      # Figma property -> code prop: {Type: style}
+    checks: dict[str, bool] = field(default_factory=lambda: {c: True for c in FIGMA_CHECKS})
+
+
 @dataclass
 class Config:
     llm_base_url: str = "http://localhost:8000/v1"
@@ -67,6 +99,13 @@ class Config:
     compare_dir: str = ".codegen/compare"
     repo_root: str | None = None
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
+    # `readiness`: issue weights, and device-decoration layers ignored everywhere (see readiness.py).
+    readiness_weights: dict[str, float] = field(default_factory=lambda: dict(READINESS_WEIGHTS))
+    ignore_layers: list[str] = field(default_factory=lambda: list(DEFAULT_IGNORE_LAYERS))
+    # `figma-codegen mcp`: tools may only read/write files under this directory (default: cwd).
+    mcp_workspace_root: str | None = None
+    # `import-figma`: naming conventions of the Figma library.
+    figma_import: FigmaImportRules = field(default_factory=FigmaImportRules)
     # Where the config file came from (None = defaults only). Informational.
     source: str | None = None
 
@@ -101,7 +140,7 @@ ENV_VARS: dict[str, str] = {
 }
 
 _PATH_KEYS = {"paths.manifest", "paths.tokens", "paths.examples", "paths.skills", "paths.traces",
-              "paths.figma_json", "paths.compare", "paths.repo_root"}
+              "paths.figma_json", "paths.compare", "paths.repo_root", "mcp.workspace_root"}
 _PLATFORM_PATH_FIELDS = {"sandbox_file", "compile_cwd", "render_cwd", "render_entry_file", "render_output"}
 _STRING_KEYS = {"llm.base_url", "llm.model", "llm.api_key", "figma.token"}
 
@@ -211,8 +250,22 @@ def _from_dict(data: dict, base: Path) -> Config:
     agent = _section(data, "agent")
     paths = _section(data, "paths")
     figma = _section(data, "figma")
+    readiness = _section(data, "readiness")
+    mcp = _section(data, "mcp")
 
     cfg = Config()
+    weights = readiness.get("weights") or {}
+    if not isinstance(weights, dict):
+        raise ValueError("readiness.weights must be a mapping, e.g. {missing_component: 6}")
+    unknown = sorted(set(weights) - set(READINESS_WEIGHTS))
+    if unknown:
+        raise ValueError(f"readiness.weights: unknown issue(s) {', '.join(unknown)}; "
+                         f"known: {', '.join(READINESS_WEIGHTS)}")
+    cfg.readiness_weights.update({k: float(v) for k, v in weights.items()})
+    if "ignore_layers" in readiness:
+        layers = readiness["ignore_layers"] or []
+        cfg.ignore_layers = [layers] if isinstance(layers, str) else [str(x) for x in layers]
+    cfg.figma_import = _figma_import_rules(_section(data, "figma_import"))
     cfg.llm_base_url = str(llm.get("base_url", cfg.llm_base_url))
     cfg.llm_model = str(llm.get("model", cfg.llm_model))
     cfg.llm_api_key = str(llm.get("api_key", cfg.llm_api_key))
@@ -236,6 +289,7 @@ def _from_dict(data: dict, base: Path) -> Config:
     cfg.figma_json_dir = _resolve(base, paths.get("figma_json", cfg.figma_json_dir))  # empty/null disables saving
     cfg.compare_dir = _resolve(base, paths.get("compare") or cfg.compare_dir)
     cfg.repo_root = _resolve(base, paths.get("repo_root"))
+    cfg.mcp_workspace_root = _resolve(base, mcp.get("workspace_root"))
 
     def cmd_list(value: Any) -> list[str] | None:
         if isinstance(value, str):
@@ -260,6 +314,30 @@ def _from_dict(data: dict, base: Path) -> Config:
     return cfg
 
 
+def _figma_import_rules(sec: dict) -> FigmaImportRules:
+    rules = FigmaImportRules()
+    for name in ("private_prefixes", "visibility_prefixes", "state_props", "interaction_states", "disabled_values",
+                 "action_names", "input_names", "toggle_names"):
+        if name in sec:
+            v = sec[name] or []
+            setattr(rules, name, [v] if isinstance(v, str) else [str(x) for x in v])
+    aliases = sec.get("prop_aliases") or {}
+    if not isinstance(aliases, dict):
+        raise ValueError("figma_import.prop_aliases must be a mapping, e.g. {Type: style}")
+    rules.prop_aliases = {str(k): str(v) for k, v in aliases.items()}
+    checks = sec.get("checks") or {}
+    if not isinstance(checks, dict):
+        raise ValueError("figma_import.checks must be a mapping, e.g. {boolean_variant: false}")
+    unknown = sorted(set(checks) - set(FIGMA_CHECKS))
+    if unknown:
+        raise ValueError(f"figma_import.checks: unknown check(s) {', '.join(unknown)}; known: {', '.join(FIGMA_CHECKS)}")
+    rules.checks.update({k: _bool(v) for k, v in checks.items()})
+    unknown = sorted(set(sec) - set(vars(FigmaImportRules())))
+    if unknown:
+        raise ValueError(f"figma_import: unknown key(s) {', '.join(unknown)}")
+    return rules
+
+
 def describe(cfg: Config, show_secrets: bool = False) -> dict:
     """Effective config as a nested dict (secrets masked), for `figma-codegen config`."""
     def secret(v: str | None) -> str | None:
@@ -280,4 +358,7 @@ def describe(cfg: Config, show_secrets: bool = False) -> dict:
                   "traces": cfg.trace_dir, "figma_json": cfg.figma_json_dir, "compare": cfg.compare_dir,
                   "repo_root": cfg.repo_root},
         "platforms": {name: vars(pc) for name, pc in cfg.platforms.items()},
+        "readiness": {"weights": cfg.readiness_weights, "ignore_layers": cfg.ignore_layers},
+        "figma_import": vars(cfg.figma_import),
+        "mcp": {"workspace_root": cfg.mcp_workspace_root},
     }

@@ -12,13 +12,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .config import Config
 from .design_system import DesignSystem
 from .progress import Progress
 from .prompts import (PLATFORMS, fix_prompt, load_examples, no_code_prompt,
-                      system_prompt, user_prompt)
+                      system_prompt, update_system_prompt, user_prompt)
 from .simplify import SimplifyResult
 from .skills import SkillLoader, SkillPlan
 from .tools import Tools
@@ -34,6 +34,13 @@ class AgentResult:
     trace_path: str | None = None
     tool_calls: int = 0
     notes: list[str] = field(default_factory=list)
+    check_issues: list[str] = field(default_factory=list)   # last round's safety-check problems (update)
+
+    def feedback(self) -> str:
+        """What is still wrong with the last answer, for the human."""
+        if self.check_issues:
+            return "Safety checks failed:\n" + "\n".join(f"- {i}" for i in self.check_issues)
+        return self.validation.feedback() if self.validation else ""
 
 
 class Tracer:
@@ -146,7 +153,25 @@ class CodegenAgent:
         empty = SkillPlan(platform)
         tracer.log("start", platform=platform, screen=screen_name, model=self.cfg.llm_model,
                    spec=result.spec, examples=len(examples), **(skills or empty).trace())
+        return self._rounds(messages, platform, tools, tracer, skills, loader)
 
+    def run_update(self, prompt: str, platform: str, screen_name: str,
+                   check: Callable[[str], list[str]], trace: dict | None = None) -> AgentResult:
+        """Targeted update of an existing file (see update.py). `prompt` holds the current file and the
+        change list; `check(code)` returns safety problems, which are sent back like lint errors."""
+        tracer = Tracer(self.cfg.trace_dir, f"{screen_name}-update")
+        tools = Tools(self.ds, platform, self.cfg.repo_root)
+        messages: list[dict] = [
+            {"role": "system", "content": update_system_prompt(platform)},
+            {"role": "user", "content": prompt},
+        ]
+        tracer.log("start_update", platform=platform, screen=screen_name, model=self.cfg.llm_model, **(trace or {}))
+        return self._rounds(messages, platform, tools, tracer, None, None, check)
+
+    def _rounds(self, messages: list[dict], platform: str, tools: Tools, tracer: Tracer,
+                skills: SkillPlan | None, loader: SkillLoader | None,
+                check: Callable[[str], list[str]] | None = None) -> AgentResult:
+        """model -> code -> (safety check) -> lint + compile -> feedback, up to agent.max_rounds."""
         out = AgentResult(ok=False, code=None, rounds=0, validation=None,
                           trace_path=str(tracer.path) if tracer.path else None)
         plat = self.cfg.platform(platform)
@@ -169,6 +194,17 @@ class CodegenAgent:
                 continue
 
             out.code = code
+            if check is not None:
+                with self.progress.step(f"{tag} · safety checks") as st:
+                    problems = check(code)
+                    st.done("ok" if not problems else f"{len(problems)} problem(s)", ok=not problems)
+                tracer.log("safety", round=rnd, problems=problems, **(getattr(check, "last_stats", None) or {}))
+                out.check_issues = problems
+                if problems:
+                    feedback = "Safety checks failed:\n" + "\n".join(f"- {p}" for p in problems)
+                    messages.append({"role": "user", "content": fix_prompt(feedback, platform)})
+                    self._compact(messages)
+                    continue
             with self.progress.step(f"{tag} · {check_label}") as st:
                 patterns = {**(skills.patterns() if skills else {}), **(loader.patterns() if loader else {})}
                 v = validate(code, platform, plat, patterns)

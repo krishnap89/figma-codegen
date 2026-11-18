@@ -47,7 +47,7 @@ def test_vector_artwork_becomes_one_graphic():
     logo = {"id": "g1", "name": "logo", "type": "GROUP", "children": [inner, vec(3)],
             "absoluteBoundingBox": {"x": 0, "y": 0, "width": 120, "height": 40}}
     res = simplify(make_ds(), screen(logo))
-    assert res.spec["root"]["children"] == [{"type": "Graphic", "name": "logo", "sizePx": "120x40"}]
+    assert res.spec["root"]["children"] == [{"type": "Graphic", "name": "logo", "id": "g1", "sizePx": "120x40"}]
     assert len(warnings_with(res, GRAPHIC_WARNING)) == 1
     assert len(res.warnings) == 1
 
@@ -57,7 +57,7 @@ def test_wrapper_frames_collapse():
     outer = frame("Outer", [frame("Inner", [text("Hi")], id="1:2")], id="1:1", layoutSizingHorizontal="FILL")
     res = simplify(make_ds(), screen(outer))
     assert res.spec["root"]["children"] == [
-        {"type": "Text", "name": "Hi", "text": "Hi", "style": "raw:Nonepx/None", "fill": "maxWidth"}
+        {"type": "Text", "name": "Hi", "id": "9:9", "text": "Hi", "style": "raw:Nonepx/None", "fill": "maxWidth"}
     ]
 
 

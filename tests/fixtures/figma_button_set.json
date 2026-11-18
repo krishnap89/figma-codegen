@@ -1,0 +1,56 @@
+{
+  "name": "Android Components",
+  "lastModified": "2026-01-01T00:00:00Z",
+  "nodes": {
+    "1:352": {
+      "document": {
+        "id": "1:352",
+        "name": "Button",
+        "type": "COMPONENT_SET",
+        "description": "Text button in three emphasis levels.",
+        "componentPropertyDefinitions": {
+          "Type": {"type": "VARIANT", "defaultValue": "Primary", "variantOptions": ["Primary", "Secondary", "Tertiary"]},
+          "State": {"type": "VARIANT", "defaultValue": "Normal", "variantOptions": ["Normal", "Pressed", "Disabled"]},
+          "👁 Icon": {"type": "VARIANT", "defaultValue": "False", "variantOptions": ["False", "True"]},
+          "✏️ Button Text#227:0": {"type": "TEXT", "defaultValue": "Button"},
+          "✅ Icon#385:0": {"type": "INSTANCE_SWAP", "defaultValue": "9:1", "preferredValues": []},
+          "👁 Sticky#1754:0": {"type": "BOOLEAN", "defaultValue": false}
+        },
+        "children": [
+          {
+            "id": "1:400",
+            "name": "Type=Primary, State=Normal, 👁 Icon=False",
+            "type": "COMPONENT",
+            "interactions": [{"trigger": {"type": "ON_PRESS"}, "actions": []}],
+            "children": [
+              {"id": "1:401", "name": "Button Text", "type": "TEXT", "characters": "Button",
+               "componentPropertyReferences": {"characters": "✏️ Button Text#227:0"}}
+            ]
+          },
+          {
+            "id": "1:410",
+            "name": "Type=Tertiary, State=Disabled, 👁 Icon=True",
+            "type": "COMPONENT",
+            "children": [
+              {"id": "1:411", "name": "Icon", "type": "INSTANCE", "componentId": "9:1",
+               "componentPropertyReferences": {"mainComponent": "✅ Icon#385:0"},
+               "children": [{"id": "I1:411;1:1", "name": "Vector", "type": "VECTOR"}]},
+              {"id": "1:412", "name": "Button Text", "type": "TEXT", "characters": "Button",
+               "componentPropertyReferences": {"characters": "✏️ Button Text#227:0"}}
+            ]
+          }
+        ]
+      },
+      "components": {
+        "1:400": {"key": "b0", "name": "Type=Primary, State=Normal, 👁 Icon=False", "componentSetId": "1:352"},
+        "1:410": {"key": "b1", "name": "Type=Tertiary, State=Disabled, 👁 Icon=True", "componentSetId": "1:352"},
+        "9:1": {"key": "i0", "name": "arrow-right", "remote": true}
+      },
+      "componentSets": {
+        "1:352": {"key": "00000000000000000000000000000000000000a7", "name": "Button",
+                  "description": "Text button in three emphasis levels."}
+      },
+      "styles": {}
+    }
+  }
+}
